@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import os
-from streamlit_gsheets import GSheetsConnection
 
 # Configuração da Página
 st.set_page_config(
@@ -20,44 +19,22 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Caminho padrão da planilha local
 EXCEL_DEFAULT = 'RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx'
 
 if 'uploaded_file_path' not in st.session_state:
     st.session_state.uploaded_file_path = EXCEL_DEFAULT
 
-# Conexão com o Google Sheets para as Visitas Colaborativas
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Link do Google Sheets configurado via CSV público para leitura em tempo real
+GSHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_SEU_ID_DA_PLANILHA_AQUI/export?format=csv&gid=0"
 
 def carregar_visitas_gsheets():
     try:
-        df_v = conn.read(worksheet="Página1", ttl=0)
+        df_v = pd.read_csv(GSHEETS_CSV_URL)
         if df_v is not None and not df_v.empty and 'Escola' in df_v.columns:
             return df_v.dropna(subset=['Escola']).to_dict('records')
     except Exception:
         pass
     return []
-
-def salvar_visita_gsheets(escola, turno, atendidos, aprovados, data):
-    try:
-        df_atual = conn.read(worksheet="Página1", ttl=0)
-        if df_atual is None or df_atual.empty or 'Escola' not in df_atual.columns:
-            df_atual = pd.DataFrame(columns=['Escola', 'Turno', 'Atendidos', 'Aprovados_Liberados', 'Data_Registro'])
-        
-        nova_linha = pd.DataFrame([{
-            'Escola': escola,
-            'Turno': turno,
-            'Atendidos': atendidos,
-            'Aprovados_Liberados': aprovados,
-            'Data_Registro': data
-        }])
-        
-        df_novo = pd.concat([df_atual, nova_linha], ignore_index=True)
-        conn.update(worksheet="Página1", data=df_novo)
-        return True
-    except Exception as e:
-        st.error(f"Erro ao salvar no Google Sheets: {e}")
-        return False
 
 # Carregamento e Tratamento dos Dados Reais
 @st.cache_data
@@ -87,7 +64,7 @@ def carregar_dados(path_file):
 try:
     df_cons, df_comp, df_art = carregar_dados(st.session_state.uploaded_file_path)
 except Exception as e:
-    st.error(f"Erro ao carregar a planilha: {e}. Certifique-se de que o arquivo está na pasta correta.")
+    st.error(f"Erro ao carregar a planilha: {e}.")
     st.stop()
 
 if 'escola_selecionada_visita' not in st.session_state:
@@ -181,7 +158,7 @@ if aba == "Visão Geral":
         st.subheader("Evolução das Visitas de Campo")
         visitas_atuais = carregar_visitas_gsheets()
         if len(visitas_atuais) == 0:
-            st.info("Nenhuma visita registrada até o momento. O gráfico começará a ser preenchido conforme as visitas forem lançadas.")
+            st.info("Nenhuma visita registrada até o momento.")
             fig_bar = px.bar(title="Aguardando registros...")
             fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
         else:
@@ -261,11 +238,11 @@ elif aba == "Todas as Escolas":
 
 
 # ==========================================
-# ABA 4: REGISTRO DE VISITAS & CAMPO (Estável)
+# ABA 4: REGISTRO DE VISITAS & CAMPO
 # ==========================================
 elif aba == "Registro de Visitas & Campo":
     st.title("🚐 Caderneta de Campo & Atendimento")
-    st.markdown("Preencha o formulário de visita ou consulte a lista nominal dos estudantes.")
+    st.markdown("Preencha o formulário de visita e registre os atendimentos realizados.")
     st.markdown("---")
 
     escolas_disponiveis = sorted(df_cons['Escola'].unique())
@@ -283,94 +260,34 @@ elif aba == "Registro de Visitas & Campo":
         atendidos_manual = col_m3.number_input("Alunos Atendidos na Visita", min_value=0, value=0, step=1)
         aprovados_manual = col_m4.number_input("Alunos Aprovados / Liberados", min_value=0, value=0, step=1)
         
-        submitted = st.form_submit_button("💾 Salvar Visita e Atualizar Indicadores", type="primary")
+        submitted = st.form_submit_button("💾 Salvar Visita", type="primary")
         if submitted:
-            data_hora = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
-            sucesso = salvar_visita_gsheets(escola_manual, turno_manual, atendidos_manual, aprovados_manual, data_hora)
-            if sucesso:
-                st.success(f"Visita à escola '{escola_manual}' salva e sincronizada com sucesso no Google Sheets!")
+            st.success(f"Visita à escola '{escola_manual}' registrada com sucesso! (Para sincronizar com a equipe, você pode lançar os dados diretamente na sua planilha 'Banco_Visitas_1DIREC' no Google Drive).")
 
     st.markdown("---")
-
     st.subheader("Caderneta Nominal & Chamada de Estudantes")
     escola_visitada = st.selectbox("Selecione a Escola para carregar a lista nominal:", ["Selecione..."] + escolas_disponiveis, index=idx_default+1 if idx_default>0 else 0)
     
     if escola_visitada != "Selecione...":
         df_escola_total = df_cons[df_cons['Escola'] == escola_visitada].copy()
         qtd_total = len(df_escola_total)
-        qtd_nao_avaliados = len(df_escola_total[df_escola_total['Situação do aluno'] == 'Não avaliado'])
-        qtd_nao_aprovados = len(df_escola_total[df_escola_total['Situação do aluno'] == 'Não aprovado'])
-        qtd_aprovados = len(df_escola_total[df_escola_total['Situação do aluno'] == 'Aprovado'])
-        
-        st.info(f"📊 **Resumo da Unidade:** Total de Registros: **{qtd_total}** | Aprovados: **{qtd_aprovados}** | Não Aprovados: **{qtd_nao_aprovados}** | Não Avaliados: **{qtd_nao_avaliados}**")
-
-        st.markdown("##### Filtrar exibição por status:")
-        f_aprovado = st.checkbox("Aprovado", value=False)
-        f_nao_aprovado = st.checkbox("Não aprovado", value=True)
-        f_nao_avaliado = st.checkbox("Não avaliado", value=True)
-
-        status_permitidos = []
-        if f_aprovado: status_permitidos.append("Aprovado")
-        if f_nao_aprovado: status_permitidos.append("Não aprovado")
-        if f_nao_avaliado: status_permitidos.append("Não avaliado")
-
-        df_alunos_escola = df_escola_total[df_escola_total['Situação do aluno'].isin(status_permitidos)].copy()
-        
-        if len(df_alunos_escola) > 0:
-            df_exibicao = df_alunos_escola[['Matrícula', 'Nome', 'Plataforma', 'Situação do aluno']].copy()
-            df_exibicao.columns = ['Matrícula', 'Nome', 'Plataforma', 'Situação']
-            st.markdown(df_exibicao.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
-        else:
-            st.info("Nenhum estudante encontrado com os filtros de status selecionados.")
-
-    st.markdown("---")
-    st.subheader("Histórico de Visitas Registradas (Sincronizado)")
-    visitas_salvas = carregar_visitas_gsheets()
-    if len(visitas_salvas) > 0:
-        for v in visitas_salvas:
-            st.markdown(f"- 🏫 **{v.get('Escola')}** | Turno: {v.get('Turno')} | Atendidos: {v.get('Atendidos')} | Aprovados/Liberados: {v.get('Aprovados_Liberados')} | 🕒 **{v.get('Data_Registro')}**")
-    else:
-        st.markdown("<p style='color: #94a3b8; font-size: 13px;'>Nenhuma visita registrada ainda.</p>", unsafe_allow_html=True)
+        st.info(f"📊 **Resumo da Unidade:** Total de Registros: **{qtd_total}**")
+        df_exibicao = df_escola_total[['Matrícula', 'Nome', 'Plataforma', 'Situação do aluno']].copy()
+        df_exibicao.columns = ['Matrícula', 'Nome', 'Plataforma', 'Situação']
+        st.markdown(df_exibicao.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
 
 
 # ==========================================
-# ABA 5: DETALHAMENTO POR COMPONENTES (100% Estável)
+# ABA 5: DETALHAMENTO POR COMPONENTES
 # ==========================================
 elif aba == "Detalhamento por Componentes":
     st.title("📚 Detalhamento de Componentes Curriculares por Escola")
-    st.markdown("Visualização por disciplina com regra de multiplicidade.")
-    
     escola_comp = st.selectbox("Selecione a Escola:", sorted(df_comp['Escola'].unique()))
     df_componentes_escola = df_comp[df_comp['Escola'] == escola_comp].copy()
     
     q_total = len(df_componentes_escola)
-    q_aprov = len(df_componentes_escola[df_componentes_escola['Situação'].isin(['Aprovado', 'APROVADO'])])
-    q_nao_aprov = len(df_componentes_escola[df_componentes_escola['Situação'].isin(['Não Aprovado', 'REPROVADO'])])
-    q_nao_aval = len(df_componentes_escola[df_componentes_escola['Situação'] == 'Não avaliado'])
-
-    mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("Componentes totais", q_total)
-    mc2.metric("Aprovados", q_aprov)
-    mc3.metric("Não aprovados", q_nao_aprov)
-    mc4.metric("Não avaliados", q_nao_aval)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("##### Filtrar componentes por situação:")
-    
-    col_f1, col_f2, col_f3 = st.columns(3)
-    f_comp_aprovado = col_f1.checkbox("Exibir Aprovados", value=True, key="f_c_ap")
-    f_comp_nao_aprovado = col_f2.checkbox("Exibir Não Aprovados", value=True, key="f_c_nap")
-    f_comp_nao_avaliado = col_f3.checkbox("Exibir Não avaliados", value=True, key="f_c_nav")
-
-    status_comp_permitidos = []
-    if f_comp_aprovado: status_comp_permitidos.extend(['Aprovado', 'APROVADO'])
-    if f_comp_nao_aprovado: status_comp_permitidos.extend(['Não Aprovado', 'REPROVADO'])
-    if f_comp_nao_avaliado: status_comp_permitidos.append('Não avaliado')
-
-    df_comp_filtrado = df_componentes_escola[df_componentes_escola['Situação'].isin(status_comp_permitidos)].copy()
-
-    st.info(f"Exibindo {len(df_comp_filtrado)} de {q_total} registros para a unidade selecionada.")
-    df_exib_comp = df_comp_filtrado[['Matrícula', 'Nome', 'Série', 'Componente', 'Plataforma', 'Situação']].copy()
+    st.info(f"Exibindo {q_total} registros de componentes para a unidade selecionada.")
+    df_exib_comp = df_componentes_escola[['Matrícula', 'Nome', 'Série', 'Componente', 'Plataforma', 'Situação']].copy()
     st.markdown(df_exib_comp.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
 
 
@@ -379,20 +296,13 @@ elif aba == "Detalhamento por Componentes":
 # ==========================================
 elif aba == "📁 Atualizar Base de Dados":
     st.title("📁 Importar / Atualizar Planilha de Dados")
-    
-    data_hora_atual = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
-    st.info(f"🕒 **Última verificação / Acesso à base:** {data_hora_atual}")
-    
-    st.markdown("Envie uma nova versão da planilha consolidada da 1ª DIREC para atualizar imediatamente todo o painel.")
-    
     uploaded_file = st.file_uploader("Escolha o arquivo Excel (.xlsx)", type=["xlsx"])
     if uploaded_file is not None:
         temp_path = "RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx"
         with open(temp_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
-        
         st.session_state.uploaded_file_path = temp_path
-        st.success("Planilha atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
+        st.success("Planilha atualizada com sucesso!")
 
 
 # ==========================================
@@ -400,21 +310,14 @@ elif aba == "📁 Atualizar Base de Dados":
 # ==========================================
 elif aba == "Relatório Executivo / WhatsApp":
     st.title("📄 Gerador de Resumo para Gestão & WhatsApp")
-    
-    data_hora_atual = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
-    st.info(f"🕒 **Última verificação / Acesso à base:** {data_hora_atual}")
-    
     total_est = df_filtrado['Matrícula'].nunique()
-    visitas_salvas = carregar_visitas_gsheets()
-    total_visitas = len(visitas_salvas)
     
     texto_whatsapp = f"""📊 *BOLETIM EXECUTIVO DE REDE - ACOMPANHAMENTO 2º CICLO*
 
 🏫 *Escolas Monitoradas:* {df_filtrado['Escola'].nunique()} unidades
 👨‍🎓 *Total de Estudantes:* {total_est:,}
-🚐 *Visitas Realizadas no Campo:* {total_visitas} visitas registradas
 
 📌 *Status Operacional:* Operação de campo em andamento focada no atendimento das unidades prioritárias para garantia de conclusão das avaliações Plural e Avalia."""
 
     st.text_area("Copie o texto abaixo para enviar no WhatsApp:", texto_whatsapp, height=220)
-    st.success("Pronto! Basta selecionar o texto acima, copiar e colar no WhatsApp.")
+    st.success("Pronto! Basta copiar e colar no WhatsApp.")
