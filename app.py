@@ -139,10 +139,6 @@ if aba == "Visão Geral":
     st.markdown("Monitoramento de Ciclos, Visitas e Plataformas (Plural & Avalia)")
     st.markdown("---")
 
-    Contagem Dinâmica e Fiel de Estudantes Únicos com base nos filtros ativos
-    df_alunos_unicos = df_filtrado.drop_duplicates(subset=['Matrícula'])
-    total_estudantes = df_alunos_unicos['Matrícula'].nunique()
-
     total_estudantes = df_filtrado['Matrícula'].nunique()
     aprovados = len(df_filtrado[df_filtrado['Situação do aluno'] == 'Aprovado'])
     nao_avaliados = len(df_filtrado[df_filtrado['Situação do aluno'] == 'Não avaliado'])
