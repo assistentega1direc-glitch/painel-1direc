@@ -139,6 +139,7 @@ if aba == "Visão Geral":
     st.markdown("Monitoramento de Ciclos, Visitas e Plataformas (Plural & Avalia)")
     st.markdown("---")
 
+    # Contagem fidedigna de Estudantes Únicos
     total_estudantes = df_filtrado['Matrícula'].nunique()
     aprovados = len(df_filtrado[df_filtrado['Situação do aluno'] == 'Aprovado'])
     nao_avaliados = len(df_filtrado[df_filtrado['Situação do aluno'] == 'Não avaliado'])
@@ -155,6 +156,7 @@ if aba == "Visão Geral":
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("Status por Situação (Estudantes Únicos)")
+        df_alunos_unicos = df_filtrado.drop_duplicates(subset=['Matrícula'])
         df_status = df_alunos_unicos['Situação do aluno'].value_counts().reset_index()
         df_status.columns = ['Situação', 'Quantidade']
         fig_donut = px.pie(
@@ -182,7 +184,6 @@ if aba == "Visão Geral":
             )
             fig_bar.update_layout(margin=dict(t=20, b=20, l=20, r=20))
         st.plotly_chart(fig_bar, use_container_width=True)
-
 
 # ==========================================
 # ABA 2: ESCOLAS PRIORITÁRIAS (25)
