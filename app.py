@@ -261,11 +261,11 @@ elif aba == "Todas as Escolas":
 
 
 # ==========================================
-# ABA 4: REGISTRO DE VISITAS & CAMPO (Integrado ao Google Sheets)
+# ABA 4: REGISTRO DE VISITAS & CAMPO (Estável)
 # ==========================================
 elif aba == "Registro de Visitas & Campo":
     st.title("🚐 Caderneta de Campo & Atendimento")
-    st.markdown("Preencha o formulário de visita ou realize a chamada nominal dos estudantes.")
+    st.markdown("Preencha o formulário de visita ou consulte a lista nominal dos estudantes.")
     st.markdown("---")
 
     escolas_disponiveis = sorted(df_cons['Escola'].unique())
@@ -285,7 +285,7 @@ elif aba == "Registro de Visitas & Campo":
         
         submitted = st.form_submit_button("💾 Salvar Visita e Atualizar Indicadores", type="primary")
         if submitted:
-            data_hora = datetime.now().strftime("%d/%m/%Y às %H:%M")
+            data_hora = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
             sucesso = salvar_visita_gsheets(escola_manual, turno_manual, atendidos_manual, aprovados_manual, data_hora)
             if sucesso:
                 st.success(f"Visita à escola '{escola_manual}' salva e sincronizada com sucesso no Google Sheets!")
@@ -317,16 +317,9 @@ elif aba == "Registro de Visitas & Campo":
         df_alunos_escola = df_escola_total[df_escola_total['Situação do aluno'].isin(status_permitidos)].copy()
         
         if len(df_alunos_escola) > 0:
-            st.markdown("Marque a presença dos estudantes durante a visita de campo:")
-            with st.form(key=f"form_chamada_{escola_visitada}"):
-                for idx, row in df_alunos_escola.iterrows():
-                    col_n, col_p = st.columns([4, 1])
-                    col_n.write(f"**{row['Nome']}** (Mat: {row['Matrícula']} | Plataforma: {row['Plataforma']} | Status: **{row['Situação do aluno']}**)")
-                    col_p.selectbox("Presença", ["Presente", "Ausente"], key=f"pres_{row['Matrícula']}_{idx}")
-                
-                salvar_chamada = st.form_submit_button("💾 Salvar Chamada Nominal", type="primary")
-                if salvar_chamada:
-                    st.success("Chamada nominal registrada com sucesso!")
+            df_exibicao = df_alunos_escola[['Matrícula', 'Nome', 'Plataforma', 'Situação do aluno']].copy()
+            df_exibicao.columns = ['Matrícula', 'Nome', 'Plataforma', 'Situação']
+            st.markdown(df_exibicao.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
         else:
             st.info("Nenhum estudante encontrado com os filtros de status selecionados.")
 
@@ -341,7 +334,7 @@ elif aba == "Registro de Visitas & Campo":
 
 
 # ==========================================
-# ABA 5: DETALHAMENTO POR COMPONENTES
+# ABA 5: DETALHAMENTO POR COMPONENTES (100% Estável)
 # ==========================================
 elif aba == "Detalhamento por Componentes":
     st.title("📚 Detalhamento de Componentes Curriculares por Escola")
