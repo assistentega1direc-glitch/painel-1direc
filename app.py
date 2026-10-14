@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime
 import os
+from streamlit_gsheets import GSheetsConnection
 
 # Configuração da Página
 st.set_page_config(
@@ -27,23 +28,38 @@ EXCEL_DEFAULT = 'RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx'
 if 'uploaded_file_path' not in st.session_state:
     st.session_state.uploaded_file_path = EXCEL_DEFAULT
 
-# Memória Local/Sessão para Visitas Registradas
-if 'banco_visitas' not in st.session_state:
-    st.session_state.banco_visitas = []
+# Conexão com o Google Sheets para o Banco de Visitas Colaborativo
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_visitas():
-    return st.session_state.banco_visitas
+    try:
+        df_v = conn.read(worksheet="Página1", ttl=0)
+        if df_v is not None and not df_v.empty and 'Escola' in df_v.columns:
+            return df_v.dropna(subset=['Escola']).to_dict('records')
+    except Exception:
+        pass
+    return []
 
 def salvar_visita(escola, turno, atendidos, aprovados, data):
-    nova_visita = {
-        'Escola': escola,
-        'Turno': turno,
-        'Atendidos': atendidos,
-        'Aprovados_Liberados': aprovados,
-        'Data_Registro': data
-    }
-    st.session_state.banco_visitas.append(nova_visita)
-    return True
+    try:
+        df_atual = conn.read(worksheet="Página1", ttl=0)
+        if df_atual is None or df_atual.empty or 'Escola' not in df_atual.columns:
+            df_atual = pd.DataFrame(columns=['Escola', 'Turno', 'Atendidos', 'Aprovados_Liberados', 'Data_Registro'])
+        
+        nova_linha = pd.DataFrame([{
+            'Escola': escola,
+            'Turno': turno,
+            'Atendidos': atendidos,
+            'Aprovados_Liberados': aprovados,
+            'Data_Registro': data
+        }])
+        
+        df_novo = pd.concat([df_atual, nova_linha], ignore_index=True)
+        conn.update(worksheet="Página1", data=df_novo)
+        return True
+    except Exception as e:
+        st.error(f"Erro ao salvar no Google Sheets: {e}")
+        return False
 
 # Carregamento e Tratamento Fiel dos Dados Reais
 @st.cache_data
@@ -184,7 +200,7 @@ if aba == "Visão Geral":
         st.subheader("Evolução das Visitas de Campo")
         visitas_atuais = carregar_visitas()
         if len(visitas_atuais) == 0:
-            st.info("Nenhuma visita registrada até o momento nesta sessão. Utilize a aba 'Registro de Visitas & Campo' para lançar novas visitas.")
+            st.info("Nenhuma visita registrada até o momento nesta planilha. Utilize a aba 'Registro de Visitas & Campo' para lançar novas visitas.")
             fig_bar = px.bar(title="Aguardando registros de visitas...")
             fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
         else:
@@ -266,7 +282,7 @@ elif aba == "Todas as Escolas":
 
 
 # ==========================================
-# ABA 4: REGISTRO DE VISITAS & CAMPO
+# ABA 4: REGISTRO DE VISITAS & CAMPO (Com Google Sheets)
 # ==========================================
 elif aba == "Registro de Visitas & Campo":
     st.title("🚐 Caderneta de Campo & Atendimento do Articulador")
@@ -291,8 +307,9 @@ elif aba == "Registro de Visitas & Campo":
         submitted = st.form_submit_button("💾 Salvar Visita e Atualizar Indicadores", type="primary")
         if submitted:
             data_hora = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
-            salvar_visita(escola_manual, turno_manual, atendidos_manual, aprovados_manual, data_hora)
-            st.success(f"Visita à escola '{escola_manual}' salva com sucesso no painel!")
+            sucesso = salvar_visita(escola_manual, turno_manual, atendidos_manual, aprovados_manual, data_hora)
+            if sucesso:
+                st.success(f"Visita à escola '{escola_manual}' salva e sincronizada com sucesso no Google Sheets!")
 
     st.markdown("---")
 
@@ -328,16 +345,16 @@ elif aba == "Registro de Visitas & Campo":
             df_exibicao.columns = ['Matrícula', 'Nome Completo', 'Plataforma', 'Situação Oficial']
             st.markdown(df_exibicao.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
         else:
-            st.info("Nenhum estudante encontrado para os filtros selecionados.")
+            st.info("Nenum estudante encontrado para os filtros selecionados.")
 
     st.markdown("---")
-    st.subheader("Histórico de Visitas Registradas (Sessão Atual)")
+    st.subheader("Histórico de Visitas Registradas (Sincronizado via Google Sheets)")
     visitas_salvas = carregar_visitas()
     if len(visitas_salvas) > 0:
         for v in visitas_salvas:
             st.markdown(f"- 🏫 **{v.get('Escola')}** | Turno: {v.get('Turno')} | Atendidos: {v.get('Atendidos')} | Aprovados/Liberados: {v.get('Aprovados_Liberados')} | 🕒 **{v.get('Data_Registro')}**")
     else:
-        st.markdown("<p style='color: #94a3b8; font-size: 13px;'>Nenhuma visita registrada na sessão até o momento.</p>", unsafe_allow_html=True)
+        st.markdown("<p style='color: #94a3b8; font-size: 13px;'>Nenhuma visita registrada na planilha até o momento.</p>", unsafe_allow_html=True)
 
 
 # ==========================================
