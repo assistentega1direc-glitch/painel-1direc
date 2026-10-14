@@ -39,7 +39,7 @@ def carregar_visitas_gsheets():
         pass
     return []
 
-# Carregamento e Tratamento Fiel dos Dados Reais
+# Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
 def carregar_dados(path_file):
     if not os.path.exists(path_file):
@@ -49,22 +49,17 @@ def carregar_dados(path_file):
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
     df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
     
-    # Tratamento das Situações Oficiais
-    df_cons['Situação do aluno'] = df_cons['Situação do aluno'].astype(str).replace({
-        'Não obrigado': 'Não avaliado',
-        'NÃO AGENDADA': 'Não avaliado',
-        'AGENDADA': 'Não avaliado',
-        'AGUARDANDO_INICIO': 'Não avaliado'
-    })
+    # Tratamento rigoroso das Situações Oficiais
+    for df in [df_cons, df_comp]:
+        col_sit = 'Situação do aluno' if 'Situação do aluno' in df.columns else 'Situação'
+        df[col_sit] = df[col_sit].astype(str).replace({
+            'Não obrigado': 'Não avaliado',
+            'NÃO AGENDADA': 'Não avaliado',
+            'AGENDADA': 'Não avaliado',
+            'AGUARDANDO_INICIO': 'Não avaliado'
+        })
     
-    df_comp['Situação'] = df_comp['Situação'].astype(str).replace({
-        'Não obrigado': 'Não avaliado',
-        'NÃO AGENDADA': 'Não avaliado',
-        'AGENDADA': 'Não avaliado',
-        'AGUARDANDO_INICIO': 'Não avaliado'
-    })
-    
-    # Cruzamento com Articuladores / Assessores
+    # Padronização de chaves para cruzamento de assessores
     df_art['Escola_Clean'] = df_art['Escola'].astype(str).str.strip().str.upper()
     df_cons['Escola_Clean'] = df_cons['Escola'].astype(str).str.strip().str.upper()
     df_comp['Escola_Clean'] = df_comp['Escola'].astype(str).str.strip().str.upper()
@@ -74,7 +69,6 @@ def carregar_dados(path_file):
     df_comp['Assessor(a)'] = df_comp['Escola_Clean'].map(map_assessor).fillna("Não Informado")
     
     return df_cons, df_comp, df_art
-
 try:
     df_cons, df_comp, df_art = carregar_dados(st.session_state.uploaded_file_path)
 except Exception as e:
