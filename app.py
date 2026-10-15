@@ -471,13 +471,15 @@ elif aba == "📁 Atualizar Base de Dados":
     
     if uploaded_file is not None:
         try:
+            # Lê o arquivo enviado
             df_uploaded = pd.read_excel(uploaded_file)
+            colunas_str = " ".join([str(c) for c in df_uploaded.columns]).lower()
             
             # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-            if any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
+            if any(k in colunas_str for k in ['código', 'codigo', 'rendimento', 'matricula']):
                 st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
                 
-                col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
+                col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower() or 'matricula' in c.lower()), None)
                 col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
                 col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
                 
@@ -509,13 +511,11 @@ elif aba == "📁 Atualizar Base de Dados":
                     st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
                     st.cache_data.clear()
                     st.rerun()
-            else:
-                st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
-        except Exception as ex:
-            st.error(f"Erro ao processar a planilha enviada: {ex}")
+                else:
+                    st.warning("⚠️ As colunas de código de aluno ou rendimento não foram identificadas com precisão nesta planilha do Redash.")
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
-            if 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
+            elif 'MATRÍCULA SISTEMA' in df_uploaded.columns or any('avalia' in str(c).lower() for c in df_uploaded.columns):
                 st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
                 
                 if 'DIREC' in df_uploaded.columns:
@@ -532,13 +532,16 @@ elif aba == "📁 Atualizar Base de Dados":
                     else:
                         return 'Não avaliado'
 
-                df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str).str.strip()
+                col_mat_avalia = next((c for c in df_avalia_1d.columns if 'matrícula' in c.lower() or 'matricula' in c.lower()), 'MATRÍCULA SISTEMA')
+                col_sit_avalia = next((c for c in df_avalia_1d.columns if 'situação' in c.lower() or 'situacao' in c.lower()), 'SITUAÇÃO DA AVALIAÇÃO')
+
+                df_avalia_1d[col_mat_avalia] = df_avalia_1d[col_mat_avalia].astype(str).str.strip()
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
 
-                status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
+                status_avalia = df_avalia_1d.groupby(col_mat_avalia).apply(definir_status_avalia).to_dict()
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
 
-                st.session_state['df_cons_custom'] = df_cons
+                st.session_state['df_cons_custom'] = df_cons.copy()
                 st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
                 st.rerun()
@@ -553,8 +556,9 @@ elif aba == "📁 Atualizar Base de Dados":
                 if 'df_cons_custom' in st.session_state:
                     del st.session_state['df_cons_custom']
                         
-                st.success("Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
+                st.success("🎉 Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
                 st.cache_data.clear()
+                st.rerun()
                 
         except Exception as ex:
             st.error(f"Erro ao processar a planilha enviada: {ex}")
