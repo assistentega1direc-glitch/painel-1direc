@@ -446,6 +446,7 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
                 st.success("✅ Base do Redash processada com sucesso! Estudantes sem prova mantiveram o status 'Não avaliado'.")
+		st.cache_data.clear()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
@@ -474,6 +475,7 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
                 
                 st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
+		st.cache_data.clear()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
             else:
@@ -484,6 +486,7 @@ elif aba == "📁 Atualizar Base de Dados":
                 
                 st.session_state.uploaded_file_path = temp_path
                 st.success("Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
+		st.cache_data.clear()
                 
         except Exception as ex:
             st.error(f"Erro ao processar a planilha enviada: {ex}")
