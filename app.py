@@ -514,7 +514,7 @@ if uploaded_file is not None:
         st.rerun()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
-            else:
+            	else:
                 temp_path = EXCEL_DEFAULT
                 with open(temp_path, "wb") as f:
                     uploaded_file.seek(0)
