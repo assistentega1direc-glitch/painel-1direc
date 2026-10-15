@@ -61,37 +61,31 @@ def carregar_visitas_gsheets():
 # Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
 def carregar_dados(path_file):
+    # Se existe uma base modificada na sessão (por upload recente), ela TEM de assumir o lugar principal!
     if 'df_cons_custom' in st.session_state:
-        # Se houver customizado, ainda precisamos ler os articuladores do arquivo original
-        df_art_temp = pd.read_excel(path_file, sheet_name='Articuladores ')
-        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), df_art_temp
+        df_cons_ativo = st.session_state['df_cons_custom'].copy()
+    else:
+        if not os.path.exists(path_file):
+            path_file = EXCEL_DEFAULT
+        df_cons_ativo = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
 
-    if not os.path.exists(path_file):
-        path_file = EXCEL_DEFAULT
-    
-    df_cons = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
     
-    # Tenta ler a aba de articuladores tratando possíveis variações no nome (com ou sem espaço)
-    try:
-        df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
-    except Exception:
-        df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
+    # Leitura blindada da aba de articuladores
+    excel_file_obj = pd.ExcelFile(path_file)
+    nome_aba_articuladores = next((sheet for sheet in excel_file_obj.sheet_names if 'articulador' in sheet.lower()), 'Articuladores ')
+    df_art = pd.read_excel(path_file, sheet_name=nome_aba_articuladores)
 
-    # --- CRUCIAL: PADRIZAÇÃO DE NOMES DE ESCOLA PARA O MAPA ---
-    # Limpa espaços em branco e padroniza para maiúsculas para o 'merge' não falhar por um espaço invisível
+    # Padronização e cruzamento de assessores
     df_art['Escola_Clean'] = df_art['Escola'].astype(str).str.strip().str.upper()
-    df_cons['Escola_Clean'] = df_cons['Escola'].astype(str).str.strip().str.upper()
+    df_cons_ativo['Escola_Clean'] = df_cons_ativo['Escola'].astype(str).str.strip().str.upper()
     df_comp['Escola_Clean'] = df_comp['Escola'].astype(str).str.strip().str.upper()
 
-    # Cria o dicionário de mapeamento Escola -> Assessor(a)
     map_assessor = dict(zip(df_art['Escola_Clean'], df_art['Assessor(a)']))
-
-    # Atribui o assessor correspondente nas bases
-    df_cons['Assessor(a)'] = df_cons['Escola_Clean'].map(map_assessor).fillna("Não Informado")
+    df_cons_ativo['Assessor(a)'] = df_cons_ativo['Escola_Clean'].map(map_assessor).fillna("Não Informado")
     df_comp['Assessor(a)'] = df_comp['Escola_Clean'].map(map_assessor).fillna("Não Informado")
     
-    return df_cons, df_comp, df_art
+    return df_cons_ativo, df_comp, df_art
     
     # Tratamento rigoroso das Situações Oficiais
     for df in [df_cons, df_comp]:
