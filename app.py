@@ -478,19 +478,16 @@ elif aba == "📁 Atualizar Base de Dados":
             if 'código do aluno' in df_uploaded.columns or 'rendimento (%)' in df_uploaded.columns or 'plurall' in colunas_str:
                 st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
                 
-                # Filtra especificamente para a 01ª DIREC - Natal
                 if 'Grupo' in df_uploaded.columns:
                     df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
                 else:
                     df_redash_1d = df_uploaded.copy()
                 
                 if not df_redash_1d.empty:
-                    # Limpeza e padronização das matrículas
                     df_redash_1d['Matricula_Clean'] = df_redash_1d['código do aluno'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
                     
                     def definir_status_redash(sub_df):
                         rendimentos = pd.to_numeric(sub_df['rendimento (%)'], errors='coerce')
-                        # Se qualquer avaliação do aluno na disciplina/ciclo for menor que 60%, fica como Não aprovado
                         if (rendimentos < 60).any():
                             return 'Não aprovado'
                         else:
@@ -498,14 +495,19 @@ elif aba == "📁 Atualizar Base de Dados":
                             
                     status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
                     
-                    # Limpeza idêntica na base consolidada principal
-                    df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    # Pega a base atual (da sessão ou do arquivo padrão)
+                    if 'df_cons_custom' in st.session_state:
+                        base_trabalho = st.session_state['df_cons_custom'].copy()
+                    else:
+                        base_trabalho = pd.read_excel(EXCEL_DEFAULT, sheet_name='Alunos Consolidado')
+
+                    base_trabalho['Matricula_Clean'] = base_trabalho['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
                     
                     # Atualiza a situação mantendo quem não veio na planilha (preserva os 'Não avaliados')
-                    df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
+                    base_trabalho['Situação do aluno'] = base_trabalho['Matricula_Clean'].map(status_redash).fillna(base_trabalho['Situação do aluno'])
                     
-                    # Salva no estado da sessão para refletir instantaneamente em todas as abas
-                    st.session_state['df_cons_custom'] = df_cons.copy()
+                    # Salva obrigatoriamente no session_state para alimentar todas as abas
+                    st.session_state['df_cons_custom'] = base_trabalho.copy()
                     st.success(f"✅ Base do Redash processada com sucesso! {len(status_redash)} estudantes atualizados. Indicadores recalculados nas abas.")
                     st.cache_data.clear()
                     st.rerun()
@@ -530,13 +532,19 @@ elif aba == "📁 Atualizar Base de Dados":
                     else:
                         return 'Não avaliado'
 
-                df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str).str.strip()
-                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
+                if 'df_cons_custom' in st.session_state:
+                    base_trabalho = st.session_state['df_cons_custom'].copy()
+                else:
+                    base_trabalho = pd.read_excel(EXCEL_DEFAULT, sheet_name='Alunos Consolidado')
 
-                status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
-                df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
+                col_mat_avalia = next((c for c in df_avalia_1d.columns if 'matrícula' in c.lower() or 'matricula' in c.lower()), 'MATRÍCULA SISTEMA')
+                df_avalia_1d[col_mat_avalia] = df_avalia_1d[col_mat_avalia].astype(str).str.strip()
+                base_trabalho['Matrícula_Str'] = base_trabalho['Matrícula'].astype(str).str.strip()
 
-                st.session_state['df_cons_custom'] = df_cons.copy()
+                status_avalia = df_avalia_1d.groupby(col_mat_avalia).apply(definir_status_avalia).to_dict()
+                base_trabalho['Situação do aluno'] = base_trabalho['Matrícula_Str'].map(status_avalia).fillna(base_trabalho['Situação do aluno'])
+
+                st.session_state['df_cons_custom'] = base_trabalho.copy()
                 st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
                 st.rerun()
