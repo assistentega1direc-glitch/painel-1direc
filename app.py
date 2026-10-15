@@ -486,8 +486,8 @@ if uploaded_file is not None:
             
             if 'DIREC' in df_uploaded.columns:
             df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
-        else:
-            df_avalia_1d = df_uploaded.copy()
+            else:
+                df_avalia_1d = df_uploaded.copy()
         
         # 1. DEFINE A FUNÇÃO DE AVALIAÇÃO PRIMEIRO
         def definir_status_avalia(sub_df):
