@@ -474,17 +474,17 @@ elif aba == "📁 Atualizar Base de Dados":
             df_uploaded = pd.read_excel(uploaded_file)
             
             # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-        elif any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
-            st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
+            if any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
+                st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
             
-            col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
-            col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
-            col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
+                col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
+                col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
+                col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
             
-            if col_cod and col_rend:
-                if col_grupo:
-                    # Filtra especificamente pela 01ª DIREC (aceitando '01ª DIREC' ou 'NATAL')
-                    df_redash_1d = df_uploaded[df_uploaded[col_grupo].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
+                if col_cod and col_rend:
+                    if col_grupo:
+                        # Filtra especificamente pela 01ª DIREC (aceitando '01ª DIREC' ou 'NATAL')
+                        df_redash_1d = df_uploaded[df_uploaded[col_grupo].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
                 else:
                     df_redash_1d = df_uploaded.copy()
                 
