@@ -61,16 +61,35 @@ def carregar_visitas_gsheets():
 # Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
 def carregar_dados(path_file):
-    # Se houver uma base modificada na sessão (por upload recente do Redash/Avalia), usa ela diretamente!
     if 'df_cons_custom' in st.session_state:
-        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Articuladores ')
+        # Se houver customizado, ainda precisamos ler os articuladores do arquivo original
+        df_art_temp = pd.read_excel(path_file, sheet_name='Articuladores')
+        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), df_art_temp
 
     if not os.path.exists(path_file):
         path_file = EXCEL_DEFAULT
     
     df_cons = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
-    df_art = pd.read_excel(path_file, sheet_name='Articuladores ')  # Certifique-se de que aqui está 'Articuladores '
+    
+    # Tenta ler a aba de articuladores tratando possíveis variações no nome (com ou sem espaço)
+    try:
+        df_art = pd.read_excel(path_file, sheet_name='Articuladores')
+    except Exception:
+        df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
+
+    # --- CRUCIAL: PADRIZAÇÃO DE NOMES DE ESCOLA PARA O MAPA ---
+    # Limpa espaços em branco e padroniza para maiúsculas para o 'merge' não falhar por um espaço invisível
+    df_art['Escola_Clean'] = df_art['Escola'].astype(str).str.strip().str.upper()
+    df_cons['Escola_Clean'] = df_cons['Escola'].astype(str).str.strip().str.upper()
+    df_comp['Escola_Clean'] = df_comp['Escola'].astype(str).str.strip().str.upper()
+
+    # Cria o dicionário de mapeamento Escola -> Assessor(a)
+    map_assessor = dict(zip(df_art['Escola_Clean'], df_art['Assessor(a)']))
+
+    # Atribui o assessor correspondente nas bases
+    df_cons['Assessor(a)'] = df_cons['Escola_Clean'].map(map_assessor).fillna("Não Informado")
+    df_comp['Assessor(a)'] = df_comp['Escola_Clean'].map(map_assessor).fillna("Não Informado")
     
     return df_cons, df_comp, df_art
     
@@ -159,14 +178,24 @@ filtro_escola = st.sidebar.selectbox("Escola", escolas_disp)
 plataformas_disp = ["Todas (Plural & Avalia)", "Plural (Redash)", "Avalia"]
 filtro_plataforma = st.sidebar.selectbox("Plataforma", plataformas_disp)
 
-# Aplicação segura dos filtros no DataFrame principal
+# --- APLICAÇÃO DOS FILTROS GLOBAIS (INCLUINDO PLATAFORMA) ---
 df_filtrado = df_cons.copy()
+
 if filtro_assessor != "Todos(as)" and col_assessor:
     df_filtrado = df_filtrado[df_filtrado[col_assessor].astype(str) == filtro_assessor]
+
 if filtro_tutor != "Todos(as)" and col_tutor:
     df_filtrado = df_filtrado[df_filtrado[col_tutor].astype(str) == filtro_tutor]
+
 if filtro_escola != "Todos(as)" and col_escola:
     df_filtrado = df_filtrado[df_filtrado[col_escola].astype(str) == filtro_escola]
+
+# Adiciona o filtro de Plataforma de forma segura
+if filtro_plataforma != "Todas (Plural & Avalia)" and 'Plataforma' in df_filtrado.columns:
+    if filtro_plataforma == "Plural (Redash)":
+        df_filtrado = df_filtrado[df_filtrado['Plataforma'].astype(str).str.contains('Plurall|Plural', case=False, na=False)]
+    elif filtro_plataforma == "Avalia":
+        df_filtrado = df_filtrado[df_filtrado['Plataforma'].astype(str).str.contains('Avalia', case=False, na=False)]
 
 
 # ==========================================
