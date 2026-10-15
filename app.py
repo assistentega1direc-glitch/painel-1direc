@@ -445,43 +445,46 @@ elif aba == "📁 Atualizar Base de Dados":
     st.markdown("Envie a planilha do **Redash (Plurall)**, do **Avalia** ou a nova **Base Consolidada** da 1ª DIREC para atualizar imediatamente todo o painel.")
     
     uploaded_file = st.file_uploader("Escolha a planilha (.xlsx)", type=["xlsx"])
-    if uploaded_file is not None:
-        try:
-            df_uploaded = pd.read_excel(uploaded_file)
-            
-            # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-            if 'código do aluno' in df_uploaded.columns and 'rendimento (%)' in df_uploaded.columns:
-                st.info("🔄 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
-                
-                if 'Grupo' in df_uploaded.columns:
-                    df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
-                else:
-                    df_redash_1d = df_uploaded.copy()
-                
-                df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
-                
-                def definir_status_redash(sub_df):
-                    if (sub_df['rendimento (%)'] < 60).any():
-                        return 'Não aprovado'
-                    else:
-                        return 'Aprovado'
-                
-                status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_redash).to_dict()
-                
-                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
-                df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
-                
-                # Guarda na sessão ativa para o painel refletir instantaneamente
-                st.session_state['df_cons_custom'] = df_cons
-                
-                st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
-                st.cache_data.clear()
+if uploaded_file is not None:
+    try:
+        df_uploaded = pd.read_excel(uploaded_file)
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo Excel: {e}")
+        df_uploaded = None
 
-           # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
-    if 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
-        st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
-        
-        if 'DIREC' in df_uploaded.columns:
+    if df_uploaded is not None:
+        # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
+        if 'código do aluno' in df_uploaded.columns or 'codigo do aluno' in df_uploaded.columns:
+            st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
+            
+            if 'Grupo' in df_uploaded.columns:
+                df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
+            else:
+                df_redash_1d = df_uploaded.copy()
+            
+            df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
+            
+            def definir_status_redash(sub_df):
+                if (sub_df['rendimento (%)'] < 60).any():
+                    return 'Não aprovado'
+                else:
+                    return 'Aprovado'
+                    
+            status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_redash).to_dict()
+            
+            df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
+            df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
+            
+            st.session_state['df_cons_custom'] = df_cons
+            st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
+            st.cache_data.clear()
+            st.rerun()
+
+        # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
+        elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
+            st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
+            
+            if 'DIREC' in df_uploaded.columns:
             df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
         else:
             df_avalia_1d = df_uploaded.copy()
