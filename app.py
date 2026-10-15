@@ -40,16 +40,23 @@ if 'uploaded_file_path' not in st.session_state:
     st.session_state.uploaded_file_path = EXCEL_DEFAULT
 
 # Link do Google Sheets via CSV público para leitura colaborativa em tempo real
-GSHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/1_SEU_ID_DA_PLANILHA_AQUI/export?format=csv&gid=0"
+GSHEETS_CSV_URL = "https://docs.google.com/spreadsheets/d/1SEU_ID_DA_PLANILHA_AQUI/export?format=csv&gid=0"
 
 def carregar_visitas_gsheets():
+    visitas = []
+    # 1. Tenta carregar visitas do Google Sheets
     try:
         df_v = pd.read_csv(GSHEETS_CSV_URL)
         if df_v is not None and not df_v.empty and 'Escola' in df_v.columns:
-            return df_v.dropna(subset=['Escola']).to_dict('records')
+            visitas = df_v.dropna(subset=['Escola']).to_dict('records')
     except Exception:
         pass
-    return []
+    
+    # 2. Adiciona as visitas registradas durante os testes na sessão
+    if 'visitas_custom' in st.session_state and len(st.session_state['visitas_custom']) > 0:
+        visitas.extend(st.session_state['visitas_custom'])
+        
+    return visitas
 
 # Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
@@ -136,9 +143,9 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🔍 Filtros Globais")
 
 # Identifica com segurança as colunas disponíveis na base
-col_assessor = next((c for c in ['Assessor(a)', 'Assessor', 'Articulador'] if c in df_cons.columns), None)
-col_tutor = next((c for c in ['Professor-Tutor', 'Tutor', 'Professor'] if c in df_cons.columns), None)
-col_escola = next((c for c in ['Escola', 'NOME DA ESCOLA'] if c in df_cons.columns), None)
+col_assessor = next((c for c in df_cons.columns if any(k in c.lower() for k in ['assessor', 'articulador'])), None)
+col_tutor = next((c for c in df_cons.columns if any(k in c.lower() for k in ['tutor', 'professor'])), None)
+col_escola = next((c for c in df_cons.columns if any(k in c.lower() for k in ['escola', 'unidade'])), None)
 
 assessors_disp = ["Todos(as)"] + sorted([str(x) for x in df_cons[col_assessor].dropna().unique()]) if col_assessor else ["Todos(as)"]
 filtro_assessor = st.sidebar.selectbox("Assessor(a)", assessors_disp)
@@ -148,6 +155,9 @@ filtro_tutor = st.sidebar.selectbox("Professor-Tutor", tutores_disp)
 
 escolas_disp = ["Todos(as)"] + sorted([str(x) for x in df_cons[col_escola].dropna().unique()]) if col_escola else ["Todos(as)"]
 filtro_escola = st.sidebar.selectbox("Escola", escolas_disp)
+
+plataformas_disp = ["Todas (Plural & Avalia)", "Plural (Redash)", "Avalia"]
+filtro_plataforma = st.sidebar.selectbox("Plataforma", plataformas_disp)
 
 # Aplicação segura dos filtros no DataFrame principal
 df_filtrado = df_cons.copy()
@@ -196,28 +206,30 @@ if aba == "Visão Geral":
         st.plotly_chart(fig_donut, use_container_width=True)
 
     with col_g2:
-    	st.subheader("Evolução das Visitas de Campo")
-    	visitas_atuais = carregar_visitas_gsheets()
+    st.subheader("Evolução das Visitas de Campo")
     
-    	# Se houver visitas cadastradas na sessão de testes, exibe elas prioritariamente
-    	if len(st.session_state.get('visitas_custom', [])) > 0:
-        	df_visitas_view = pd.DataFrame(st.session_state['visitas_custom'])
-        	st.dataframe(df_visitas_view, use_container_width=True)
-    	elif len(visitas_atuais) == 0:
-        	st.info("Nenhuma visita registrada até o momento na planilha de controle.")
-        	fig_bar = px.bar(title="Aguardando registros de visitas...")
-        	fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
-        	st.plotly_chart(fig_bar, use_container_width=True)
-    	else:
-        	df_v = pd.DataFrame(visitas_atuais)
-        	df_visitas_real = df_v.groupby('Escola')['Atendidos'].sum().reset_index()
-        	fig_bar = px.bar(
-            		df_visitas_real, x='Escola', y='Atendidos', text_auto=True,
-            		labels={'Escola':'Escola', 'Atendidos':'Alunos Atendidos'},
-            		color_discrete_sequence=['#d97706']
-        	)
-        	fig_bar.update_layout(margin=dict(t=20, b=20, l=20, r=20))
-        	st.plotly_chart(fig_bar, use_container_width=True)
+    # Chama a função que já puxa do Sheets + os testes da sessão atual
+    visitas_atuais = carregar_visitas_gsheets()
+    
+    if len(visitas_atuais) == 0:
+        st.info("Nenhuma visita registrada até o momento.")
+        fig_bar = px.bar(title="Aguardando registros de visitas...")
+        fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
+        st.plotly_chart(fig_bar, use_container_width=True)
+    else:
+        df_v = pd.DataFrame(visitas_atuais)
+        df_visitas_real = df_v.groupby('Escola')['Atendidos'].sum().reset_index()
+        
+        fig_bar = px.bar(
+            df_visitas_real, 
+            x='Escola', 
+            y='Atendidos', 
+            text_auto=True,
+            labels={'Escola': 'Escola', 'Atendidos': 'Alunos Atendidos'},
+            color_discrete_sequence=['#d97706']
+        )
+        fig_bar.update_layout(margin=dict(t=20, b=20, l=20, r=20))
+        st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
 # ABA 2: ESCOLAS PRIORITÁRIAS (25)
@@ -466,35 +478,37 @@ elif aba == "📁 Atualizar Base de Dados":
                 st.cache_data.clear()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
-            elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
-                st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
-                
-                if 'DIREC' in df_uploaded.columns:
-                    df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
-                else:
-                    df_avalia_1d = df_uploaded.copy()
-                
-                df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str)
-                
-                def definir_status_avalia(sub_df):
-                    situacoes = sub_df['SITUAÇÃO DA AVALIAÇÃO'].astype(str).str.upper().tolist()
-                    if 'REPROVADO' in situacoes:
-                        return 'Não aprovado'
-                    elif all(s == 'APROVADO' for s in situacoes):
-                        return 'Aprovado'
-                    else:
-                        return 'Não avaliado'
-                
-                status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
-                
-                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
-                df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
-                
-                # Guarda na sessão ativa para o painel refletir instantaneamente
-                st.session_state['df_cons_custom'] = df_cons
-                
-                st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados na sessão.")
-                st.cache_data.clear()
+    elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
+        st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
+        
+        if 'DIREC' in df_uploaded.columns:
+            df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
+        else:
+            df_avalia_1d = df_uploaded.copy()
+        
+        # 1. DEFINE A FUNÇÃO DE AVALIAÇÃO PRIMEIRO
+        def definir_status_avalia(sub_df):
+            situacoes = sub_df['SITUAÇÃO DA AVALIAÇÃO'].astype(str).str.upper().tolist()
+            if 'REPROVADO' in situacoes:
+                return 'Não aprovado'
+            elif all(s == 'APROVADO' for s in situacoes):
+                return 'Aprovado'
+            else:
+                return 'Não avaliado'
+
+        # 2. PADRONIZA AS MATRÍCULAS
+        df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str).str.strip()
+        df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
+
+        # 3. FAZ O MAPEAMENTO E ATUALIZA
+        status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
+        df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
+
+        # 4. SALVA NA SESSÃO E ATUALIZA A TELA
+        st.session_state['df_cons_custom'] = df_cons
+        st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
+        st.cache_data.clear()
+        st.rerun()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
             else:
