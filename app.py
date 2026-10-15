@@ -515,10 +515,10 @@ if uploaded_file is not None:
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
             	else:
-                temp_path = EXCEL_DEFAULT
-                with open(temp_path, "wb") as f:
-                    uploaded_file.seek(0)
-                    f.write(uploaded_file.getbuffer())
+                	temp_path = EXCEL_DEFAULT
+                	with open(temp_path, "wb") as f:
+                    		uploaded_file.seek(0)
+                    		f.write(uploaded_file.getbuffer())
                 
                 if 'df_cons_custom' in st.session_state:
                     del st.session_state['df_cons_custom']
