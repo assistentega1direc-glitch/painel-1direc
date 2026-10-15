@@ -442,12 +442,12 @@ elif aba == "📁 Atualizar Base de Dados":
             return 'Aprovado'
     
     status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_rigoroso).to_dict()
-            
-            # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
-            df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
-            df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
-            
-            st.success("✅ Base do Redash processada com sucesso! Estudantes que não fizeram a prova mantiveram o status 'Não avaliado'.")
+
+    # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
+    df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
+    df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
+
+    st.success("✅ Base do Redash processada com sucesso! Estudantes que não fizeram a prova mantiveram o status 'Não avaliado'.")
 
 
 # ==========================================
