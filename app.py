@@ -514,20 +514,20 @@ if uploaded_file is not None:
         st.rerun()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
-        else:
-            temp_path = EXCEL_DEFAULT
-            with open(temp_path, "wb") as f:
-                uploaded_file.seek(0)
-                f.write(uploaded_file.getbuffer())
-
+            else:
+                temp_path = EXCEL_DEFAULT
+                with open(temp_path, "wb") as f:
+                    	uploaded_file.seek(0)
+                    	f.write(uploaded_file.getbuffer())
+                
             if 'df_cons_custom' in st.session_state:
                 del st.session_state['df_cons_custom']
-
+                    
             st.success("Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
             st.cache_data.clear()
-
-    except Exception as ex:
-        st.error(f"Erro ao processar a planilha enviada: {ex}")
+                
+        except Exception as ex:
+            st.error(f"Erro ao processar a planilha enviada: {ex}")
 
 # ==========================================
 # ABA 7: RELATÓRIO EXECUTIVO / WHATSAPP
