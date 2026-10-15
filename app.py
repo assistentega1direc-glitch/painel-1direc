@@ -415,39 +415,50 @@ elif aba == "📁 Atualizar Base de Dados":
     data_hora_atual = datetime.now().strftime("%d/%m/%Y às %Hh%Mmin%S")
     st.info(f"🕒 **Última verificação / Acesso à base:** {data_hora_atual}")
     
-    st.markdown("Envie uma nova versão da planilha consolidada da 1ª DIREC para atualizar imediatamente todo o painel.")
+    st.markdown("Envie a planilha do Redash ou a nova versão consolidada da 1ª DIREC para atualizar imediatamente todo o painel.")
     
     uploaded_file = st.file_uploader("Escolha a planilha (.xlsx)", type=["xlsx"])
     if uploaded_file is not None:
-        df_uploaded = pd.read_excel(uploaded_file)
-        
-        # Identifica se é a planilha do REDASH pelo nome das colunas
-        if 'código do aluno' in df_uploaded.columns and 'rendimento (%)' in df_uploaded.columns:
-            st.info("🔄 Planilha do Redash identificada! Cruzando notas e preservando os Não Avaliados...")
+        try:
+            df_uploaded = pd.read_excel(uploaded_file)
             
-            # Filtra 1ª DIREC
-            if 'Grupo' in df_uploaded.columns:
-                df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
+            # Identifica se é a planilha do REDASH pelo nome das colunas
+            if 'código do aluno' in df_uploaded.columns and 'rendimento (%)' in df_uploaded.columns:
+                st.info("🔄 Planilha do Redash identificada! Cruzando notas com regra rigorosa e preservando os Não Avaliados...")
+                
+                # Filtra 1ª DIREC
+                if 'Grupo' in df_uploaded.columns:
+                    df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
+                else:
+                    df_redash_1d = df_uploaded.copy()
+                
+                # Agrupa por aluno: só é considerado Aprovado se todas as suas provas tiverem rendimento >= 60%
+                df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
+                
+                def definir_status_rigoroso(sub_df):
+                    if (sub_df['rendimento (%)'] < 60).any():
+                        return 'Não aprovado'
+                    else:
+                        return 'Aprovado'
+                
+                status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_rigoroso).to_dict()
+                
+                # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
+                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
+                df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
+                
+                st.success("✅ Base do Redash processada com sucesso! Estudantes que não fizeram a prova mantiveram o status 'Não avaliado'.")
             else:
-                df_redash_1d = df_uploaded.copy()
-            
-            # Agrupa por aluno: só é considerado Aprovado se a menor nota/rendimento de todas as suas provas for >= 60%
-    df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
-    
-    def definir_status_rigoroso(sub_df):
-        # Se houver alguma prova com rendimento abaixo de 60%, ele continua pendente/não aprovado nas pendências
-        if (sub_df['rendimento (%)'] < 60).any():
-            return 'Não aprovado'
-        else:
-            return 'Aprovado'
-    
-    status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_rigoroso).to_dict()
-
-    # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
-    df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
-    df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
-
-    st.success("✅ Base do Redash processada com sucesso! Estudantes que não fizeram a prova mantiveram o status 'Não avaliado'.")
+                # Caso seja a planilha oficial consolidada padrão
+                temp_path = "RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx"
+                with open(temp_path, "wb") as f:
+                    uploaded_file.seek(0)
+                    f.write(uploaded_file.getbuffer())
+                
+                st.session_state.uploaded_file_path = temp_path
+                st.success("Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
+        except Exception as ex:
+            st.error(f"Erro ao processar o arquivo enviado: {ex}")
 
 
 # ==========================================
