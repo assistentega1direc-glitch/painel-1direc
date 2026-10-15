@@ -431,16 +431,17 @@ elif aba == "📁 Atualizar Base de Dados":
             else:
                 df_redash_1d = df_uploaded.copy()
             
-            # Agrupa por aluno calculando se passou (Rendimento >= 60%)
-            df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
-            
-            def definir_status_redash(sub_df):
-                if (sub_df['rendimento (%)'] >= 60).any():
-                    return 'Aprovado'
-                else:
-                    return 'Não aprovado'
-            
-            status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_redash).to_dict()
+            # Agrupa por aluno: só é considerado Aprovado se a menor nota/rendimento de todas as suas provas for >= 60%
+    df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
+    
+    def definir_status_rigoroso(sub_df):
+        # Se houver alguma prova com rendimento abaixo de 60%, ele continua pendente/não aprovado nas pendências
+        if (sub_df['rendimento (%)'] < 60).any():
+            return 'Não aprovado'
+        else:
+            return 'Aprovado'
+    
+    status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_rigoroso).to_dict()
             
             # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
             df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
