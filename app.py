@@ -444,10 +444,10 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
-                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
-                    df_cons.to_excel(writer, sheet_name='Alunos Consolidado', index=False)
+                # Guarda na sessão ativa para o painel refletir instantaneamente
+                st.session_state['df_cons_custom'] = df_cons
                 
-                st.success("✅ Base do Redash processada e salva com sucesso! Indicadores atualizados.")
+                st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
                 st.cache_data.clear()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
@@ -475,10 +475,10 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
                 
-                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='w') as writer:
-                    df_cons.to_excel(writer, sheet_name='Alunos Consolidado', index=False)
+                # Guarda na sessão ativa para o painel refletir instantaneamente
+                st.session_state['df_cons_custom'] = df_cons
                 
-                st.success("✅ Base da plataforma Avalia processada e salva com sucesso! Indicadores atualizados.")
+                st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados na sessão.")
                 st.cache_data.clear()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
@@ -488,7 +488,9 @@ elif aba == "📁 Atualizar Base de Dados":
                     uploaded_file.seek(0)
                     f.write(uploaded_file.getbuffer())
                 
-                st.session_state.uploaded_file_path = temp_path
+                if 'df_cons_custom' in st.session_state:
+                    del st.session_state['df_cons_custom']
+                    
                 st.success("Planilha oficial consolidada atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
                 st.cache_data.clear()
                 
