@@ -480,7 +480,7 @@ elif aba == "📁 Atualizar Base de Dados":
             df_uploaded = pd.read_excel(uploaded_file)
             
             # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-        elif any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
+            if any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
             st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
             
             # Encontra os nomes reais das colunas independentemente de maiúsculas/minúsculas
