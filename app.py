@@ -56,14 +56,14 @@ def carregar_visitas_gsheets():
 def carregar_dados(path_file):
     # Se houver uma base modificada na sessão (por upload recente do Redash/Avalia), usa ela diretamente!
     if 'df_cons_custom' in st.session_state:
-        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Assessores ')
+        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Articuladores ')
 
     if not os.path.exists(path_file):
         path_file = EXCEL_DEFAULT
     
     df_cons = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
-    df_art = pd.read_excel(path_file, sheet_name='Assessores ')
+    df_art = pd.read_excel(path_file, sheet_name='Articuladores ')  # Certifique-se de que aqui está 'Articuladores '
     
     return df_cons, df_comp, df_art
     
