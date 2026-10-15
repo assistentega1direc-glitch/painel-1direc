@@ -517,7 +517,7 @@ elif aba == "📁 Atualizar Base de Dados":
                 st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
-            elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
+            if 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
                 st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
                 
                 if 'DIREC' in df_uploaded.columns:
