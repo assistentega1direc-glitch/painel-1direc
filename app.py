@@ -61,7 +61,7 @@ def carregar_visitas_gsheets():
 # Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
 def carregar_dados(path_file):
-    # Se existe uma base modificada na sessão (por upload recente), ela TEM de assumir o lugar principal!
+    # Se existe uma base modificada na sessão (por upload recente), ela assume o lugar principal!
     if 'df_cons_custom' in st.session_state:
         df_cons_ativo = st.session_state['df_cons_custom'].copy()
     else:
