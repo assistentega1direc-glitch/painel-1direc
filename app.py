@@ -63,7 +63,7 @@ def carregar_visitas_gsheets():
 def carregar_dados(path_file):
     if 'df_cons_custom' in st.session_state:
         # Se houver customizado, ainda precisamos ler os articuladores do arquivo original
-        df_art_temp = pd.read_excel(path_file, sheet_name='Articuladores')
+        df_art_temp = pd.read_excel(path_file, sheet_name='Articuladores ')
         return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), df_art_temp
 
     if not os.path.exists(path_file):
@@ -74,7 +74,7 @@ def carregar_dados(path_file):
     
     # Tenta ler a aba de articuladores tratando possíveis variações no nome (com ou sem espaço)
     try:
-        df_art = pd.read_excel(path_file, sheet_name='Articuladores')
+        df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
     except Exception:
         df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
 
