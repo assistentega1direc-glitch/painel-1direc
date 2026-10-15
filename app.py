@@ -51,12 +51,18 @@ def carregar_visitas_gsheets():
 # Carregamento e Tratamento Fiel e Validado dos Dados Reais
 @st.cache_data
 def carregar_dados(path_file):
+    # Se houver uma base modificada na sessão (por upload recente do Redash/Avalia), usa ela diretamente!
+    if 'df_cons_custom' in st.session_state:
+        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Articuladores ')
+
     if not os.path.exists(path_file):
         path_file = EXCEL_DEFAULT
     
     df_cons = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
     df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
+    
+    return df_cons, df_comp, df_art
     
     # Tratamento rigoroso das Situações Oficiais
     for df in [df_cons, df_comp]:
