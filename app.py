@@ -473,44 +473,46 @@ elif aba == "📁 Atualizar Base de Dados":
         try:
             df_uploaded = pd.read_excel(uploaded_file)
             
-           # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-           if any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
-               st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
-            
-               col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
-               col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
-               col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
-            
-               if col_cod and col_rend:
-                   if col_grupo:
-                       df_redash_1d = df_uploaded[df_uploaded[col_grupo].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
-                   else:
-                       df_redash_1d = df_uploaded.copy()
+            # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
+            if any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
+                st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
                 
-               # Limpeza profunda da matrícula do Redash (remove tudo o que não for número)
-               df_redash_1d['Matricula_Clean'] = df_redash_1d[col_cod].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
+                col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
+                col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
                 
-               def definir_status_redash(sub_df):
-                   rendimentos = pd.to_numeric(sub_df[col_rend], errors='coerce')
-                   if (rendimentos < 60).any():
-                       return 'Não aprovado'
-                   else:
-                       return 'Aprovado'
-                        
-               status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
+                if col_cod and col_rend:
+                    if col_grupo:
+                        df_redash_1d = df_uploaded[df_uploaded[col_grupo].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
+                    else:
+                        df_redash_1d = df_uploaded.copy()
                 
-               # Limpeza profunda idêntica na base consolidada oficial
-               df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                
-               # Atualiza a situação do aluno cruzando pelas matrículas limpas
-               df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
-                
-               st.session_state['df_cons_custom'] = df_cons.copy()
-               st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
-               st.cache_data.clear()
-               st.rerun()
-       else:
-           st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
+                    # Limpeza profunda da matrícula do Redash (remove tudo o que não for número)
+                    df_redash_1d['Matricula_Clean'] = df_redash_1d[col_cod].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    
+                    def definir_status_redash(sub_df):
+                        rendimentos = pd.to_numeric(sub_df[col_rend], errors='coerce')
+                        if (rendimentos < 60).any():
+                            return 'Não aprovado'
+                        else:
+                            return 'Aprovado'
+                            
+                    status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
+                    
+                    # Limpeza profunda idêntica na base consolidada oficial
+                    df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    
+                    # Atualiza a situação do aluno cruzando pelas matrículas limpas
+                    df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
+                    
+                    st.session_state['df_cons_custom'] = df_cons.copy()
+                    st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
+                    st.cache_data.clear()
+                    st.rerun()
+            else:
+                st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
+        except Exception as ex:
+            st.error(f"Erro ao processar a planilha enviada: {ex}")
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             if 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
