@@ -487,30 +487,30 @@ elif aba == "📁 Atualizar Base de Dados":
                    else:
                        df_redash_1d = df_uploaded.copy()
                 
-                # Limpeza profunda da matrícula do Redash (remove tudo o que não for número)
-                df_redash_1d['Matricula_Clean'] = df_redash_1d[col_cod].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+               # Limpeza profunda da matrícula do Redash (remove tudo o que não for número)
+               df_redash_1d['Matricula_Clean'] = df_redash_1d[col_cod].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
                 
-                def definir_status_redash(sub_df):
-                    rendimentos = pd.to_numeric(sub_df[col_rend], errors='coerce')
-                    if (rendimentos < 60).any():
-                        return 'Não aprovado'
-                    else:
-                        return 'Aprovado'
+               def definir_status_redash(sub_df):
+                   rendimentos = pd.to_numeric(sub_df[col_rend], errors='coerce')
+                   if (rendimentos < 60).any():
+                       return 'Não aprovado'
+                   else:
+                       return 'Aprovado'
                         
-                status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
+               status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
                 
-                # Limpeza profunda idêntica na base consolidada oficial
-                df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+               # Limpeza profunda idêntica na base consolidada oficial
+               df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
                 
-                # Atualiza a situação do aluno cruzando pelas matrículas limpas
-                df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
+               # Atualiza a situação do aluno cruzando pelas matrículas limpas
+               df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
-                st.session_state['df_cons_custom'] = df_cons.copy()
-                st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
+               st.session_state['df_cons_custom'] = df_cons.copy()
+               st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
+               st.cache_data.clear()
+               st.rerun()
+       else:
+           st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             if 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
