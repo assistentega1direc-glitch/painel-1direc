@@ -206,10 +206,10 @@ if aba == "Visão Geral":
         st.plotly_chart(fig_donut, use_container_width=True)
 
     with col_g2:
-    st.subheader("Evolução das Visitas de Campo")
+    	st.subheader("Evolução das Visitas de Campo")
     
     # Chama a função que já puxa do Sheets + os testes da sessão atual
-    visitas_atuais = carregar_visitas_gsheets()
+    	visitas_atuais = carregar_visitas_gsheets()
     
     if len(visitas_atuais) == 0:
         st.info("Nenhuma visita registrada até o momento.")
