@@ -426,7 +426,6 @@ elif aba == "📁 Atualizar Base de Dados":
             if 'código do aluno' in df_uploaded.columns and 'rendimento (%)' in df_uploaded.columns:
                 st.info("🔄 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
                 
-                # Filtra 1ª DIREC
                 if 'Grupo' in df_uploaded.columns:
                     df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
                 else:
@@ -445,16 +444,18 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
-                st.success("✅ Base do Redash processada com sucesso! Estudantes sem prova mantiveram o status 'Não avaliado'.")
+                # Salva a alteração permanentemente no Excel padrão para o painel ler atualizado
+                df_cons.to_excel(EXCEL_DEFAULT, index=False)
+                
+                st.success("✅ Base do Redash processada e salva com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
                 st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
                 
-                # Filtra 1ª DIREC
                 if 'DIREC' in df_uploaded.columns:
-                    df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
+                    df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
                 else:
                     df_avalia_1d = df_uploaded.copy()
                 
@@ -474,12 +475,15 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
                 
-                st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
+                # Salva a alteração permanentemente no Excel padrão
+                df_cons.to_excel(EXCEL_DEFAULT, index=False)
+                
+                st.success("✅ Base da plataforma Avalia processada e salva com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
             else:
-                temp_path = "RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx"
+                temp_path = EXCEL_DEFAULT
                 with open(temp_path, "wb") as f:
                     uploaded_file.seek(0)
                     f.write(uploaded_file.getbuffer())
