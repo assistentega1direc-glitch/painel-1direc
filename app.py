@@ -444,7 +444,7 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
-                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='w') as writer:
+                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
                     df_cons.to_excel(writer, sheet_name='Alunos Consolidado', index=False)
                 
                 st.success("✅ Base do Redash processada e salva com sucesso! Indicadores atualizados.")
