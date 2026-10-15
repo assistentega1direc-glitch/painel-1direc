@@ -485,7 +485,7 @@ if uploaded_file is not None:
             st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
             
             if 'DIREC' in df_uploaded.columns:
-            df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
+            	df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
             else:
                 df_avalia_1d = df_uploaded.copy()
         
