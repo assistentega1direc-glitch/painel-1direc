@@ -196,28 +196,28 @@ if aba == "Visão Geral":
         st.plotly_chart(fig_donut, use_container_width=True)
 
     with col_g2:
-    st.subheader("Evolução das Visitas de Campo")
-    visitas_atuais = carregar_visitas_gsheets()
+    	st.subheader("Evolução das Visitas de Campo")
+    	visitas_atuais = carregar_visitas_gsheets()
     
-    # Se houver visitas cadastradas na sessão de testes, exibe elas prioritariamente
-    if len(st.session_state.get('visitas_custom', [])) > 0:
-        df_visitas_view = pd.DataFrame(st.session_state['visitas_custom'])
-        st.dataframe(df_visitas_view, use_container_width=True)
-    elif len(visitas_atuais) == 0:
-        st.info("Nenhuma visita registrada até o momento na planilha de controle.")
-        fig_bar = px.bar(title="Aguardando registros de visitas...")
-        fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
-        st.plotly_chart(fig_bar, use_container_width=True)
-    else:
-        df_v = pd.DataFrame(visitas_atuais)
-        df_visitas_real = df_v.groupby('Escola')['Atendidos'].sum().reset_index()
-        fig_bar = px.bar(
-            df_visitas_real, x='Escola', y='Atendidos', text_auto=True,
-            labels={'Escola':'Escola', 'Atendidos':'Alunos Atendidos'},
-            color_discrete_sequence=['#d97706']
-        )
-        fig_bar.update_layout(margin=dict(t=20, b=20, l=20, r=20))
-        st.plotly_chart(fig_bar, use_container_width=True)
+    	# Se houver visitas cadastradas na sessão de testes, exibe elas prioritariamente
+    	if len(st.session_state.get('visitas_custom', [])) > 0:
+        	df_visitas_view = pd.DataFrame(st.session_state['visitas_custom'])
+        	st.dataframe(df_visitas_view, use_container_width=True)
+    	elif len(visitas_atuais) == 0:
+        	st.info("Nenhuma visita registrada até o momento na planilha de controle.")
+        	fig_bar = px.bar(title="Aguardando registros de visitas...")
+        	fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
+        	st.plotly_chart(fig_bar, use_container_width=True)
+    	else:
+        	df_v = pd.DataFrame(visitas_atuais)
+        	df_visitas_real = df_v.groupby('Escola')['Atendidos'].sum().reset_index()
+        	fig_bar = px.bar(
+            		df_visitas_real, x='Escola', y='Atendidos', text_auto=True,
+            		labels={'Escola':'Escola', 'Atendidos':'Alunos Atendidos'},
+            		color_discrete_sequence=['#d97706']
+        	)
+        	fig_bar.update_layout(margin=dict(t=20, b=20, l=20, r=20))
+        	st.plotly_chart(fig_bar, use_container_width=True)
 
 # ==========================================
 # ABA 2: ESCOLAS PRIORITÁRIAS (25)
