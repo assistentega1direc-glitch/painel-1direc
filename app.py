@@ -478,37 +478,37 @@ elif aba == "📁 Atualizar Base de Dados":
                 st.cache_data.clear()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
-    	    elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
-        	st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
-        
-        	if 'DIREC' in df_uploaded.columns:
-            		df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
-        	else:
-            		df_avalia_1d = df_uploaded.copy()
-        
-        	# 1. DEFINE A FUNÇÃO DE AVALIAÇÃO PRIMEIRO
-        	def definir_status_avalia(sub_df):
-            		situacoes = sub_df['SITUAÇÃO DA AVALIAÇÃO'].astype(str).str.upper().tolist()
-            		if 'REPROVADO' in situacoes:
-                		return 'Não aprovado'
-            		elif all(s == 'APROVADO' for s in situacoes):
-                		return 'Aprovado'
-            		else:
-               			return 'Não avaliado'
+    elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
+    st.info("🔄 Planilha da plataforma **Avalia** identificada! Cruzando situações das avaliações...")
+    
+    if 'DIREC' in df_uploaded.columns:
+        df_avalia_1d = df_uploaded[df_uploaded['DIREC'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
+    else:
+        df_avalia_1d = df_uploaded.copy()
+    
+    # 1. DEFINE A FUNÇÃO DE AVALIAÇÃO PRIMEIRO
+    def definir_status_avalia(sub_df):
+        situacoes = sub_df['SITUAÇÃO DA AVALIAÇÃO'].astype(str).str.upper().tolist()
+        if 'REPROVADO' in situacoes:
+            return 'Não aprovado'
+        elif all(s == 'APROVADO' for s in situacoes):
+            return 'Aprovado'
+        else:
+            return 'Não avaliado'
 
-        	# 2. PADRONIZA AS MATRÍCULAS
-        	df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str).str.strip()
-        	df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
+    # 2. PADRONIZA AS MATRÍCULAS
+    df_avalia_1d['MATRÍCULA SISTEMA'] = df_avalia_1d['MATRÍCULA SISTEMA'].astype(str).str.strip()
+    df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
 
-        	# 3. FAZ O MAPEAMENTO E ATUALIZA
-        	status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
-        	df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
+    # 3. FAZ O MAPEAMENTO E ATUALIZA
+    status_avalia = df_avalia_1d.groupby('MATRÍCULA SISTEMA').apply(definir_status_avalia).to_dict()
+    df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
 
-        	# 4. SALVA NA SESSÃO E ATUALIZA A TELA
-        	st.session_state['df_cons_custom'] = df_cons
-        	st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
-       	 	st.cache_data.clear()
-        	st.rerun()
+    # 4. SALVA NA SESSÃO E ATUALIZA A TELA
+    st.session_state['df_cons_custom'] = df_cons
+    st.success("✅ Base da plataforma Avalia processada com sucesso! Indicadores atualizados.")
+    st.cache_data.clear()
+    st.rerun()
 
             # --- 3. SE FOR A BASE CONSOLIDADA OFICIAL ---
             else:
