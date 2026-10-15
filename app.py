@@ -480,31 +480,41 @@ elif aba == "📁 Atualizar Base de Dados":
             df_uploaded = pd.read_excel(uploaded_file)
             
             # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-            if 'código do aluno' in df_uploaded.columns or 'codigo do aluno' in df_uploaded.columns:
-                st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
-                
-                if 'Grupo' in df_uploaded.columns:
-                    df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
+        elif any(c in str(df_uploaded.columns).lower() for c in ['código do aluno', 'codigo do aluno', 'rendimento']):
+            st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
+            
+            # Encontra os nomes reais das colunas independentemente de maiúsculas/minúsculas
+            col_cod = next((c for c in df_uploaded.columns if 'código' in c.lower() or 'codigo' in c.lower()), None)
+            col_rend = next((c for c in df_uploaded.columns if 'rendimento' in c.lower() or 'nota' in c.lower() or '%' in c), None)
+            col_grupo = next((c for c in df_uploaded.columns if 'grupo' in c.lower() or 'direc' in c.lower()), None)
+            
+            if col_cod and col_rend:
+                if col_grupo:
+                    df_redash_1d = df_uploaded[df_uploaded[col_grupo].astype(str).str.contains('01ª DIREC', case=False, na=False)].copy()
                 else:
                     df_redash_1d = df_uploaded.copy()
                 
-                df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
+                df_redash_1d[col_cod] = df_redash_1d[col_cod].astype(str).str.strip()
                 
                 def definir_status_redash(sub_df):
-                    if (sub_df['rendimento (%)'] < 60).any():
+                    # Garante conversão numérica segura da coluna de rendimento
+                    rendimentos = pd.to_numeric(sub_df[col_rend], errors='coerce')
+                    if (rendimentos < 60).any():
                         return 'Não aprovado'
                     else:
                         return 'Aprovado'
                         
-                status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_redash).to_dict()
+                status_redash = df_redash_1d.groupby(col_cod).apply(definir_status_redash).to_dict()
                 
-                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
+                df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str).str.strip()
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
                 st.session_state['df_cons_custom'] = df_cons
                 st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
                 st.cache_data.clear()
                 st.rerun()
+            else:
+                st.error("⚠️ As colunas de código de aluno ou rendimento não foram encontradas na planilha do Redash enviada.")
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             elif 'MATRÍCULA SISTEMA' in df_uploaded.columns and 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
