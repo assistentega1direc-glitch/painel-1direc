@@ -445,7 +445,8 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
                 
                 # Salva a alteração permanentemente no Excel padrão para o painel ler atualizado
-                df_cons.to_excel(EXCEL_DEFAULT, index=False)
+                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='w') as writer:
+                df_cons.to_excel(writer, sheet_name='Alunos Consolidado', index=False)
                 
                 st.success("✅ Base do Redash processada e salva com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
@@ -476,7 +477,8 @@ elif aba == "📁 Atualizar Base de Dados":
                 df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_avalia).fillna(df_cons['Situação do aluno'])
                 
                 # Salva a alteração permanentemente no Excel padrão
-                df_cons.to_excel(EXCEL_DEFAULT, index=False)
+                with pd.ExcelWriter(EXCEL_DEFAULT, engine='openpyxl', mode='w') as writer:
+                df_cons.to_excel(writer, sheet_name='Alunos Consolidado', index=False)
                 
                 st.success("✅ Base da plataforma Avalia processada e salva com sucesso! Indicadores atualizados.")
                 st.cache_data.clear()
