@@ -11,11 +11,20 @@ st.set_page_config(
     layout="wide"
 )
 
-# Estilização visual limpa e estável
+# Estilização visual limpa, responsiva (Celular/Mobile) e tabelas com Checkbox
 st.markdown("""
     <style>
         .main { background-color: #f8fafc; }
-        .stMetric { background-color: #ffffff; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        .stMetric { background-color: #ffffff; padding: 12px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+        
+        /* Ajustes específicos para Telas de Celular */
+        @media (max-width: 768px) {
+            .main .block-container { padding-left: 0.5rem !important; padding-right: 0.5rem !important; padding-top: 1rem !important; }
+            .stMetric { padding: 10px !important; margin-bottom: 8px !important; }
+            div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
+        }
+
+        /* Estilo da Tabela Nominal de Campo com Checkbox */
         .table-striped { width: 100%; border-collapse: collapse; font-family: sans-serif; font-size: 14px; }
         .table-striped th { background-color: #f1f5f9; text-align: left; padding: 8px 12px; border-bottom: 2px solid #cbd5e1; }
         .table-striped td { padding: 8px 12px; border-bottom: 1px solid #e2e8f0; }
@@ -102,6 +111,16 @@ opcoes_menu = [
 ]
 
 aba = st.sidebar.radio("Navegação", opcoes_menu, key="aba_ativa")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("🔒 **Área de Gestão / Trava**")
+senha_admin = st.sidebar.text_input("Senha de Administrador", type="password", key="key_admin_pass")
+st.session_state.is_admin = (senha_admin == "direc2026") # Você pode alterar a senha 'direc2026' quando desejar
+
+if st.session_state.is_admin:
+    st.sidebar.success("🔑 Modo Admin Ativo")
+else:
+    st.sidebar.caption("🔒 *Exclusões e resets bloqueados.*")
 
 # --- FILTROS GLOBAIS EM CASCATA ---
 st.sidebar.markdown("---")
@@ -305,14 +324,36 @@ elif aba == "Registro de Visitas & Campo":
         if f_nao_aprovado: status_permitidos.append("Não aprovado")
         if f_nao_avaliado: status_permitidos.append("Não avaliado")
 
+        # Exibição Interativa Nominal com marcação Presente / Ausente
         df_alunos_escola = df_escola_unicos[df_escola_unicos['Situação do aluno'].isin(status_permitidos)].copy()
         
         if len(df_alunos_escola) > 0:
-            df_exibicao = df_alunos_escola[['Matrícula', 'Nome', 'Plataforma', 'Situação do aluno']].copy()
-            df_exibicao.columns = ['Matrícula', 'Nome Completo', 'Plataforma', 'Situação Oficial']
-            st.markdown(df_exibicao.to_html(index=False, classes="table table-striped"), unsafe_allow_html=True)
-        else:
-            st.info("Nenhum estudante encontrado para os filtros selecionados.")
+            st.markdown("##### 📋 Chamada / Presença de Campo:")
+            
+            # Criamos colunas interativas para marcação de Presente / Ausente
+            df_chamada = df_alunos_escola[['Matrícula', 'Nome', 'Plataforma', 'Situação do aluno']].copy()
+            df_chamada['Presente'] = False
+            df_chamada['Ausente'] = False
+            
+            # Tabela editável onde o articulador marca as caixas no celular/PC
+            df_editado = st.data_editor(
+                df_chamada,
+                column_config={
+                    "Presente": st.column_config.CheckboxColumn("Presente", default=False),
+                    "Ausente": st.column_config.CheckboxColumn("Ausente", default=False),
+                    "Matrícula": st.column_config.TextColumn("Matrícula", disabled=True),
+                    "Nome": st.column_config.TextColumn("Nome Completo", disabled=True),
+                    "Plataforma": st.column_config.TextColumn("Plataforma", disabled=True),
+                    "Situação do aluno": st.column_config.TextColumn("Situação Oficial", disabled=True),
+                },
+                disabled=["Matrícula", "Nome", "Plataforma", "Situação do aluno"],
+                hide_index=True,
+                use_container_width=True
+            )
+            
+            if st.button("💾 Salvar Frequência da Visita"):
+                presentes_count = df_editado['Presente'].sum()
+                st.success(f"Frequência registrada! **{presentes_count}** estudantes marcados como Presentes.")
 
     st.markdown("---")
     st.subheader("Histórico de Visitas Registradas (Sincronizado)")
@@ -376,14 +417,36 @@ elif aba == "📁 Atualizar Base de Dados":
     
     st.markdown("Envie uma nova versão da planilha consolidada da 1ª DIREC para atualizar imediatamente todo o painel.")
     
-    uploaded_file = st.file_uploader("Escolha o arquivo Excel (.xlsx)", type=["xlsx"])
+    uploaded_file = st.file_uploader("Escolha a planilha (.xlsx)", type=["xlsx"])
     if uploaded_file is not None:
-        temp_path = "RAPP_1DIREC_Situacao_Alunos_Tratada.xlsx"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        df_uploaded = pd.read_excel(uploaded_file)
         
-        st.session_state.uploaded_file_path = temp_path
-        st.success("Planilha oficial atualizada com sucesso! Todos os indicadores da rede foram recalculados.")
+        # Identifica se é a planilha do REDASH pelo nome das colunas
+        if 'código do aluno' in df_uploaded.columns and 'rendimento (%)' in df_uploaded.columns:
+            st.info("🔄 Planilha do Redash identificada! Cruzando notas e preservando os Não Avaliados...")
+            
+            # Filtra 1ª DIREC
+            if 'Grupo' in df_uploaded.columns:
+                df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('1ª DIREC', case=False, na=False)].copy()
+            else:
+                df_redash_1d = df_uploaded.copy()
+            
+            # Agrupa por aluno calculando se passou (Rendimento >= 60%)
+            df_redash_1d['código do aluno'] = df_redash_1d['código do aluno'].astype(str)
+            
+            def definir_status_redash(sub_df):
+                if (sub_df['rendimento (%)'] >= 60).any():
+                    return 'Aprovado'
+                else:
+                    return 'Não aprovado'
+            
+            status_redash = df_redash_1d.groupby('código do aluno').apply(definir_status_redash).to_dict()
+            
+            # Cruza com a base oficial: quem está no Redash atualiza; quem NÃO está permanece 'Não avaliado'
+            df_cons['Matrícula_Str'] = df_cons['Matrícula'].astype(str)
+            df_cons['Situação do aluno'] = df_cons['Matrícula_Str'].map(status_redash).fillna(df_cons['Situação do aluno'])
+            
+            st.success("✅ Base do Redash processada com sucesso! Estudantes que não fizeram a prova mantiveram o status 'Não avaliado'.")
 
 
 # ==========================================
