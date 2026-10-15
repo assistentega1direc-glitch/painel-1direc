@@ -53,14 +53,14 @@ def carregar_visitas_gsheets():
 def carregar_dados(path_file):
     # Se houver uma base modificada na sessão (por upload recente do Redash/Avalia), usa ela diretamente!
     if 'df_cons_custom' in st.session_state:
-        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Articuladores ')
+        return st.session_state['df_cons_custom'], pd.read_excel(path_file, sheet_name='Base componentes'), pd.read_excel(path_file, sheet_name='Assessores ')
 
     if not os.path.exists(path_file):
         path_file = EXCEL_DEFAULT
     
     df_cons = pd.read_excel(path_file, sheet_name='Alunos Consolidado')
     df_comp = pd.read_excel(path_file, sheet_name='Base componentes')
-    df_art = pd.read_excel(path_file, sheet_name='Articuladores ')
+    df_art = pd.read_excel(path_file, sheet_name='Assessores ')
     
     return df_cons, df_comp, df_art
     
@@ -128,32 +128,32 @@ if st.session_state.is_admin:
 else:
     st.sidebar.caption("🔒 *Exclusões e resets bloqueados.*")
 
-# --- FILTROS GLOBAIS EM CASCATA ---
+# --- FILTROS GLOBAIS SEGUROS ---
 st.sidebar.markdown("---")
-st.sidebar.markdown("#### 🔍 Filtros Globais")
+st.sidebar.markdown("### 🔍 Filtros Globais")
 
-tutores_disp = ["Todos(as)"] + sorted([t for t in df_cons['Professor tutor'].dropna().unique().tolist() if str(t).strip() != ""])
-tutor_sel = st.sidebar.selectbox("Professor-Tutor", tutores_disp)
+# Identifica com segurança as colunas disponíveis na base
+col_assessor = next((c for c in ['Assessor(a)', 'Assessor', 'Articulador'] if c in df_cons.columns), None)
+col_tutor = next((c for c in ['Professor-Tutor', 'Tutor', 'Professor'] if c in df_cons.columns), None)
+col_escola = next((c for c in ['Escola', 'NOME DA ESCOLA'] if c in df_cons.columns), None)
 
+assessors_disp = ["Todos(as)"] + sorted([str(x) for x in df_cons[col_assessor].dropna().unique()]) if col_assessor else ["Todos(as)"]
+filtro_assessor = st.sidebar.selectbox("Assessor(a)", assessors_disp)
+
+tutores_disp = ["Todos(as)"] + sorted([str(x) for x in df_cons[col_tutor].dropna().unique()]) if col_tutor else ["Todos(as)"]
+filtro_tutor = st.sidebar.selectbox("Professor-Tutor", tutores_disp)
+
+escolas_disp = ["Todos(as)"] + sorted([str(x) for x in df_cons[col_escola].dropna().unique()]) if col_escola else ["Todos(as)"]
+filtro_escola = st.sidebar.selectbox("Escola", escolas_disp)
+
+# Aplicação segura dos filtros no DataFrame principal
 df_filtrado = df_cons.copy()
-if tutor_sel != "Todos(as)":
-    df_filtrado = df_filtrado[df_filtrado['Professor tutor'] == tutor_sel]
-
-assessores_disp = ["Todos(as)"] + sorted([a for a in df_filtrado['Assessor(a)'].dropna().unique().tolist() if a != "Não Informado"])
-assessor_sel = st.sidebar.selectbox("Assessor(a)", assessores_disp)
-
-if assessor_sel != "Todos(as)":
-    df_filtrado = df_filtrado[df_filtrado['Assessor(a)'] == assessor_sel]
-
-escolas_disp = ["Todos(as)"] + sorted(df_filtrado['Escola'].dropna().unique().tolist())
-escola_sel = st.sidebar.selectbox("Escola", escolas_disp)
-
-if escola_sel != "Todos(as)":
-    df_filtrado = df_filtrado[df_filtrado['Escola'] == escola_sel]
-
-plat_sel = st.sidebar.selectbox("Plataforma", ["Todas (Plural & Avalia)", "Plurall", "Avalia"])
-if plat_sel != "Todas (Plural & Avalia)":
-    df_filtrado = df_filtrado[df_filtrado['Plataforma'] == plat_sel]
+if filtro_assessor != "Todos(as)" and col_assessor:
+    df_filtrado = df_filtrado[df_filtrado[col_assessor].astype(str) == filtro_assessor]
+if filtro_tutor != "Todos(as)" and col_tutor:
+    df_filtrado = df_filtrado[df_filtrado[col_tutor].astype(str) == filtro_tutor]
+if filtro_escola != "Todos(as)" and col_escola:
+    df_filtrado = df_filtrado[df_filtrado[col_escola].astype(str) == filtro_escola]
 
 
 # ==========================================
@@ -196,7 +196,13 @@ if aba == "Visão Geral":
         st.subheader("Evolução das Visitas de Campo")
         visitas_atuais = carregar_visitas_gsheets()
         if len(visitas_atuais) == 0:
-            st.info("Nenhuma visita registrada até o momento na planilha de controle.")
+            st.markdown("---")
+    	    st.subheader("Evolução das Visitas de Campo")
+    	    if len(st.session_state['visitas_custom']) > 0:
+            df_visitas_view = pd.DataFrame(st.session_state['visitas_custom'])
+            st.dataframe(df_visitas_view, use_container_width=True)
+        else:
+            st.info("Nenhuma visita registrada até o momento nesta sessão de testes.")
             fig_bar = px.bar(title="Aguardando registros de visitas...")
             fig_bar.update_layout(xaxis={"visible": False}, yaxis={"visible": False})
         else:
