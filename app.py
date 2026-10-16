@@ -159,9 +159,21 @@ def fmt_data_br(iso):
 # ============================================================
 # CAMADA DE ARMAZENAMENTO (Google Sheets com fallback local)
 # ============================================================
+def _cfg_gsheets():
+    """Aceita o bloco [gsheets] ou spreadsheet_id solto no topo dos Secrets."""
+    try:
+        if "gsheets" in st.secrets:
+            return dict(st.secrets["gsheets"])
+        cfg = {k: st.secrets[k] for k in st.secrets.keys()
+               if k in ("spreadsheet_id", "spreadsheet_url") or str(k).startswith("aba_")}
+        return cfg if ("spreadsheet_id" in cfg or "spreadsheet_url" in cfg) else None
+    except Exception:
+        return None
+
+
 def gsheets_configurado():
     try:
-        return "gcp_service_account" in st.secrets and "gsheets" in st.secrets
+        return "gcp_service_account" in st.secrets and _cfg_gsheets() is not None
     except Exception:
         return False
 
@@ -170,7 +182,7 @@ def gsheets_configurado():
 def _abrir_planilha():
     import gspread
     cliente = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
-    cfg = st.secrets["gsheets"]
+    cfg = _cfg_gsheets() or {}
     ref = str(cfg.get("spreadsheet_id") or cfg.get("spreadsheet_url") or "").strip()
     m = re.search(r"/d/([A-Za-z0-9_-]+)", ref)   # aceita tanto o ID quanto o link completo
     return cliente.open_by_key(m.group(1) if m else ref)
@@ -181,7 +193,7 @@ def _nome_ws(nome):
     try:
         mapa = {WS_VISITAS: "aba_visitas", WS_FREQ: "aba_frequencia", WS_HIST: "aba_historico",
                 WS_LOG: "aba_log", WS_IMPORT: "aba_importacoes", WS_BASE: "aba_base"}
-        return st.secrets["gsheets"].get(mapa.get(nome, ""), nome)
+        return (_cfg_gsheets() or {}).get(mapa.get(nome, ""), nome)
     except Exception:
         return nome
 
@@ -223,8 +235,8 @@ def diagnosticar_gsheets():
         chaves = list(st.secrets.keys())
     except Exception as e:
         return False, [f"❌ Os Secrets não puderam ser lidos (formato TOML inválido?). Detalhe: {e}"]
-    if "gsheets" not in chaves:
-        msgs.append("❌ Falta o bloco [gsheets] com spreadsheet_id nos Secrets.")
+    if _cfg_gsheets() is None:
+        msgs.append("❌ Falta o spreadsheet_id nos Secrets (bloco [gsheets]).")
     if "gcp_service_account" not in chaves:
         msgs.append("❌ Falta o bloco [gcp_service_account] nos Secrets (dados do arquivo .json).")
     if msgs:
