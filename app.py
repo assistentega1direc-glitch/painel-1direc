@@ -474,45 +474,36 @@ elif aba == "📁 Atualizar Base de Dados":
             df_uploaded = pd.read_excel(uploaded_file)
             colunas_str = " ".join([str(c) for c in df_uploaded.columns]).lower()
             
-            # --- 1. IDENTIFICA PLANILHA DO REDASH (PLURALL) ---
-            if 'código do aluno' in df_uploaded.columns or 'rendimento (%)' in df_uploaded.columns or 'plurall' in colunas_str:
-                st.info("📊 Planilha do **Redash (Plurall)** identificada! Cruzando notas e preservando Não Avaliados...")
-                
-                if 'Grupo' in df_uploaded.columns:
-                    df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
+            # --- 1. IDENTIFICA PLANILHA DO REDASH / PLURALL (NOVO FORMATO) ---
+        elif 'email_aluno' in df_uploaded.columns and 'Situação' in df_uploaded.columns:
+            st.info("📊 Planilha do **Redash (Plurall)** identificada! Atualizando situações dos estudantes...")
+            
+            if 'Grupo' in df_uploaded.columns:
+                df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
+            else:
+                df_redash_1d = df_uploaded.copy()
+            
+            # Extrai a matrícula limpa a partir do e-mail do aluno (antes do @)
+            df_redash_1d['Matricula_Clean'] = df_redash_1d['email_aluno'].astype(str).str.split('@').str[0].str.strip().str.lstrip('0')
+            
+            def definir_status_redash(sub_df):
+                situacoes = sub_df['Situação'].astype(str).str.upper().tolist()
+                if any('NÃO' in s or 'REPROVADO' in s for s in situacoes):
+                    return 'Não aprovado'
+                elif all('APROVADO' in s for s in situacoes):
+                    return 'Aprovado'
                 else:
-                    df_redash_1d = df_uploaded.copy()
-                
-                if not df_redash_1d.empty:
-                    df_redash_1d['Matricula_Clean'] = df_redash_1d['código do aluno'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    return 'Não avaliado'
                     
-                    def definir_status_redash(sub_df):
-                        rendimentos = pd.to_numeric(sub_df['rendimento (%)'], errors='coerce')
-                        if (rendimentos < 60).any():
-                            return 'Não aprovado'
-                        else:
-                            return 'Aprovado'
-                            
-                    status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
-                    
-                    # Pega a base atual (da sessão ou do arquivo padrão)
-                    if 'df_cons_custom' in st.session_state:
-                        base_trabalho = st.session_state['df_cons_custom'].copy()
-                    else:
-                        base_trabalho = pd.read_excel(EXCEL_DEFAULT, sheet_name='Alunos Consolidado')
-
-                    base_trabalho['Matricula_Clean'] = base_trabalho['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                    
-                    # Atualiza a situação mantendo quem não veio na planilha (preserva os 'Não avaliados')
-                    base_trabalho['Situação do aluno'] = base_trabalho['Matricula_Clean'].map(status_redash).fillna(base_trabalho['Situação do aluno'])
-                    
-                    # Salva obrigatoriamente no session_state para alimentar todas as abas
-                    st.session_state['df_cons_custom'] = base_trabalho.copy()
-                    st.success(f"✅ Base do Redash processada com sucesso! {len(status_redash)} estudantes atualizados. Indicadores recalculados nas abas.")
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Nenhum registro correspondente à '01ª DIREC - Natal' foi encontrado na planilha enviada.")
+            status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
+            
+            df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+            df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
+            
+            st.session_state['df_cons_custom'] = df_cons.copy()
+            st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
+            st.cache_data.clear()
+            st.rerun()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             elif 'MATRÍCULA SISTEMA' in df_uploaded.columns or 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
