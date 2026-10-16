@@ -475,35 +475,35 @@ elif aba == "📁 Atualizar Base de Dados":
             colunas_str = " ".join([str(c) for c in df_uploaded.columns]).lower()
             
             # --- 1. IDENTIFICA PLANILHA DO REDASH / PLURALL (NOVO FORMATO) ---
-        elif 'email_aluno' in df_uploaded.columns and 'Situação' in df_uploaded.columns:
-            st.info("📊 Planilha do **Redash (Plurall)** identificada! Atualizando situações dos estudantes...")
+            if 'email_aluno' in df_uploaded.columns and 'Situação' in df_uploaded.columns:
+                st.info("📊 Planilha do **Redash (Plurall)** identificada! Atualizando situações dos estudantes...")
             
-            if 'Grupo' in df_uploaded.columns:
-                df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
-            else:
-                df_redash_1d = df_uploaded.copy()
-            
-            # Extrai a matrícula limpa a partir do e-mail do aluno (antes do @)
-            df_redash_1d['Matricula_Clean'] = df_redash_1d['email_aluno'].astype(str).str.split('@').str[0].str.strip().str.lstrip('0')
-            
-            def definir_status_redash(sub_df):
-                situacoes = sub_df['Situação'].astype(str).str.upper().tolist()
-                if any('NÃO' in s or 'REPROVADO' in s for s in situacoes):
-                    return 'Não aprovado'
-                elif all('APROVADO' in s for s in situacoes):
-                    return 'Aprovado'
+                if 'Grupo' in df_uploaded.columns:
+                    df_redash_1d = df_uploaded[df_uploaded['Grupo'].astype(str).str.contains('01ª DIREC|NATAL', case=False, na=False)].copy()
                 else:
-                    return 'Não avaliado'
+                    df_redash_1d = df_uploaded.copy()
+            
+                # Extrai a matrícula limpa a partir do e-mail do aluno (antes do @)
+                df_redash_1d['Matricula_Clean'] = df_redash_1d['email_aluno'].astype(str).str.split('@').str[0].str.strip().str.lstrip('0')
+            
+                def definir_status_redash(sub_df):
+                    situacoes = sub_df['Situação'].astype(str).str.upper().tolist()
+                    if any('NÃO' in s or 'REPROVADO' in s for s in situacoes):
+                        return 'Não aprovado'
+                    elif all('APROVADO' in s for s in situacoes):
+                        return 'Aprovado'
+                    else:
+                        return 'Não avaliado'
                     
-            status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
+                status_redash = df_redash_1d.groupby('Matricula_Clean').apply(definir_status_redash).to_dict()
             
-            df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-            df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
-            
-            st.session_state['df_cons_custom'] = df_cons.copy()
-            st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
-            st.cache_data.clear()
-            st.rerun()
+                df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna(df_cons['Situação do aluno'])
+             
+                st.session_state['df_cons_custom'] = df_cons.copy()
+                st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados na sessão.")
+                st.cache_data.clear()
+                st.rerun()
 
             # --- 2. IDENTIFICA PLANILHA DA PLATAFORMA AVALIA ---
             elif 'MATRÍCULA SISTEMA' in df_uploaded.columns or 'SITUAÇÃO DA AVALIAÇÃO' in df_uploaded.columns:
