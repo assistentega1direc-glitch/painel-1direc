@@ -893,6 +893,24 @@ if aba == "Visão Geral":
     st.caption("Liberado = estudante sem nenhuma pendência em nenhuma plataforma. "
                "Estudantes presentes no Plurall e no Avalia são contados uma única vez.")
 
+    with st.expander("🔎 Conferência dos números (por plataforma)"):
+        linhas_conf = []
+        for nome_plat, filtro_p in [("Só Plurall (todos os alunos com prova no Plurall)", "Plurall"),
+                                    ("Só Avalia (todos os alunos com prova no Avalia)", "Avalia")]:
+            sub = cons_f[cons_f["Plataforma"] == filtro_p]
+            vc = sub["Situação do aluno"].value_counts()
+            linhas_conf.append([nome_plat, len(sub), int(vc.get(AP, 0)), int(vc.get(NAP, 0)), int(vc.get(NAV, 0))])
+        linhas_conf.append(["Soma das linhas das duas plataformas (aluno nas 2 conta 2x)", len(cons_f),
+                            int((cons_f["Situação do aluno"] == AP).sum()), int((cons_f["Situação do aluno"] == NAP).sum()),
+                            int((cons_f["Situação do aluno"] == NAV).sum())])
+        linhas_conf.append(["Estudantes únicos (números dos cartões acima)", total, ap, nap, nav])
+        st.dataframe(pd.DataFrame(linhas_conf, columns=["Recorte", "Total", AP, NAP, NAV]),
+                     hide_index=True, use_container_width=True)
+        dupla = cons_f[cons_f["Matrícula"].duplicated(keep=False)]
+        if len(dupla):
+            st.caption(f"{dupla['Matrícula'].nunique()} estudantes têm provas nas duas plataformas. "
+                       "Eles só contam como Aprovados/Liberados se estiverem aprovados nas duas.")
+
     col_g1, col_g2 = st.columns(2)
     with col_g1:
         st.subheader("Status por Situação (Estudantes Únicos)")
@@ -1076,17 +1094,18 @@ elif aba == ABA_VISITAS:
         df_alunos_escola = alunos_esc[alunos_esc["Situação do aluno"].isin(status_permitidos)].sort_values("Nome")
         if len(df_alunos_escola) > 0:
             st.markdown("##### 📋 Chamada / Presença de Campo:")
-            df_chamada = df_alunos_escola[["Matrícula", "Nome", "Série", "Plataforma", "Situação do aluno", "Pendências"]].copy()
-            df_chamada["Presente"] = False
-            df_chamada["Ausente"] = False
+            # Presente/Ausente nas primeiras colunas para ficarem sempre visíveis (inclusive no celular)
+            df_chamada = df_alunos_escola[["Nome", "Matrícula", "Série", "Plataforma", "Situação do aluno", "Pendências"]].copy()
+            df_chamada.insert(0, "Ausente", False)
+            df_chamada.insert(0, "Presente", False)
             df_editado = st.data_editor(
                 df_chamada,
                 column_config={
-                    "Presente": st.column_config.CheckboxColumn("Presente", default=False),
-                    "Ausente": st.column_config.CheckboxColumn("Ausente", default=False),
-                    "Nome": st.column_config.TextColumn("Nome Completo"),
+                    "Presente": st.column_config.CheckboxColumn("✅ Presente", default=False, width="small"),
+                    "Ausente": st.column_config.CheckboxColumn("❌ Ausente", default=False, width="small"),
+                    "Nome": st.column_config.TextColumn("Nome Completo", width="medium"),
                     "Situação do aluno": st.column_config.TextColumn("Situação Oficial"),
-                    "Pendências": st.column_config.TextColumn("Componentes pendentes", width="large"),
+                    "Pendências": st.column_config.TextColumn("Componentes pendentes", width="medium"),
                 },
                 disabled=["Matrícula", "Nome", "Série", "Plataforma", "Situação do aluno", "Pendências"],
                 hide_index=True, use_container_width=True,
