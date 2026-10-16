@@ -488,8 +488,10 @@ elif aba == "📁 Atualizar Base de Dados":
             
                 def definir_status_redash(sub_df):
                     situacoes = sub_df['Situação'].astype(str).str.upper().tolist()
+                    # Se houver qualquer componente reprovado/não aprovado, o aluno é Não aprovado
                     if any('NÃO' in s or 'REPROVADO' in s for s in situacoes):
-                        return 'Não aprovado'
+                       return 'Não aprovado'
+                    # Se todos os componentes listados forem aprovados, o aluno é Aprovado
                     elif all('APROVADO' in s for s in situacoes):
                         return 'Aprovado'
                     else:
