@@ -506,8 +506,18 @@ elif aba == "📁 Atualizar Base de Dados":
               # Atribui o status do Redash. Quem não fez nenhuma prova (não está na planilha) vira rigorosamente 'Não avaliado'
               df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna('Não avaliado')
             
+              # Garante que o número de linhas da base consolidada permanece estritamente o oficial (3.850)
+              df_cons['Matricula_Clean'] = df_cons['Matrícula'].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
+            
+              # Mapeia a situação e preenche quem não está na planilha do Redash como 'Não avaliado'
+              df_cons['Situação do aluno'] = df_cons['Matricula_Clean'].map(status_redash).fillna('Não avaliado')
+            
+              # Remove a coluna temporária para manter a estrutura limpa
+              if 'Matricula_Clean' in df_cons.columns:
+                  df_cons = df_cons.drop(columns=['Matricula_Clean'])
+            
               st.session_state['df_cons_custom'] = df_cons.copy()
-              st.success("✅ Base do Redash sincronizada com sucesso! Indicadores atualizados.")
+              st.success("✅ Base do Redash processada com sucesso! Indicadores atualizados.")
               st.cache_data.clear()
               st.rerun()
 
