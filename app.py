@@ -171,9 +171,9 @@ def _abrir_planilha():
     import gspread
     cliente = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
     cfg = st.secrets["gsheets"]
-    if "spreadsheet_id" in cfg:
-        return cliente.open_by_key(cfg["spreadsheet_id"])
-    return cliente.open_by_url(cfg["spreadsheet_url"])
+    ref = str(cfg.get("spreadsheet_id") or cfg.get("spreadsheet_url") or "").strip()
+    m = re.search(r"/d/([A-Za-z0-9_-]+)", ref)   # aceita tanto o ID quanto o link completo
+    return cliente.open_by_key(m.group(1) if m else ref)
 
 
 def _nome_ws(nome):
@@ -190,8 +190,15 @@ def _ws(nome, colunas):
     import gspread
     sh = _abrir_planilha()
     titulo = _nome_ws(nome)
+    existentes = {w.title: w for w in sh.worksheets()}
+    candidatos = [titulo]
+    if nome == WS_VISITAS:  # aceita a aba que já existe na planilha (ex.: "aba_visitas")
+        candidatos += ["Visitas", "aba_visitas", "Página1", "Sheet1"]
+    titulo_ok = next((c for c in candidatos if c in existentes), None)
     try:
-        ws = sh.worksheet(titulo)
+        if titulo_ok is None:
+            raise gspread.WorksheetNotFound(titulo)
+        ws = existentes[titulo_ok]
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=titulo, rows=1000, cols=max(len(colunas), 12))
         ws.update(values=[colunas], range_name="A1")
@@ -207,6 +214,56 @@ def _ws(nome, colunas):
             ws.add_cols(len(cab) - ws.col_count)
         ws.update(values=[cab], range_name="A1")
     return ws, cab
+
+
+def diagnosticar_gsheets():
+    """Testa a conexão passo a passo e devolve (ok, lista de mensagens)."""
+    msgs = []
+    try:
+        chaves = list(st.secrets.keys())
+    except Exception as e:
+        return False, [f"❌ Os Secrets não puderam ser lidos (formato TOML inválido?). Detalhe: {e}"]
+    if "gsheets" not in chaves:
+        msgs.append("❌ Falta o bloco [gsheets] com spreadsheet_id nos Secrets.")
+    if "gcp_service_account" not in chaves:
+        msgs.append("❌ Falta o bloco [gcp_service_account] nos Secrets (dados do arquivo .json).")
+    if msgs:
+        msgs.append(f"Blocos encontrados nos Secrets: {chaves or 'nenhum'}")
+        return False, msgs
+    msgs.append("✅ Secrets encontrados.")
+    try:
+        import gspread  # noqa: F401
+        msgs.append("✅ Biblioteca gspread instalada.")
+    except Exception:
+        return False, msgs + ["❌ gspread não instalado: confira se o requirements.txt está na raiz do repositório."]
+    conta = st.secrets["gcp_service_account"]
+    email = conta.get("client_email", "?")
+    msgs.append(f"ℹ️ E-mail da conta de serviço: {email}")
+    if "BEGIN PRIVATE KEY" not in str(conta.get("private_key", "")):
+        return False, msgs + ["❌ private_key inválida: copie o valor inteiro do .json, entre aspas, com os \\n."]
+    try:
+        _abrir_planilha.clear()
+        sh = _abrir_planilha()
+        msgs.append(f"✅ Planilha aberta: {sh.title}")
+        msgs.append(f"ℹ️ Abas: {', '.join(w.title for w in sh.worksheets())}")
+    except Exception as e:
+        txt = f"{type(e).__name__}: {e}"
+        dica = ""
+        if "PERMISSION" in txt.upper() or "403" in txt:
+            dica = (f" → Compartilhe a planilha com {email} como EDITOR, e confirme que a Google Sheets API "
+                    "e a Google Drive API estão ativadas no projeto do Google Cloud.")
+        elif "404" in txt or "NOT FOUND" in txt.upper() or "SpreadsheetNotFound" in txt:
+            dica = " → O spreadsheet_id está errado, ou a planilha não foi compartilhada com a conta de serviço."
+        elif any(t in txt for t in ("invalid_grant", "JWT", "PEM")) or "key" in txt.lower():
+            dica = " → Problema na chave: gere uma nova chave JSON e cole de novo nos Secrets."
+        return False, msgs + [f"❌ Não abriu a planilha. {txt[:300]}{dica}"]
+    try:
+        ws, cab = _ws(WS_VISITAS, COLS_VISITAS)
+        msgs.append(f"✅ Aba de visitas: '{ws.title}' (colunas: {', '.join(cab)})")
+    except Exception as e:
+        return False, msgs + [f"❌ Erro ao preparar a aba de visitas: {e}"]
+    ler_tabela.clear()
+    return True, msgs
 
 
 def _csv_local(nome):
@@ -768,6 +825,14 @@ elif gsheets_configurado():
 else:
     st.sidebar.caption("🟡 Modo local (configure o Google Sheets em secrets para salvar de forma permanente)")
 st.sidebar.caption(f"📦 {ORIGEM_BASE}")
+with st.sidebar.expander("🔧 Testar conexão com o Google Sheets"):
+    if st.button("Testar agora", key="btn_diag"):
+        ok_diag, msgs_diag = diagnosticar_gsheets()
+        for m_ in msgs_diag:
+            st.markdown(m_)
+        if ok_diag:
+            st.success("Tudo certo! As visitas serão gravadas na planilha.")
+            obter_dados.clear()
 
 
 def filtrar(df, col_plat="Plataforma"):
@@ -1064,7 +1129,11 @@ elif aba == ABA_VISITAS:
                         "Registrado_por": registrado_por, "Atendidos": int(atendidos_manual),
                         "Aprovados_Liberados": int(aprovados_manual), "Presentes": "", "Observacoes": obs,
                     }])
-                    st.success(f"✅ Visita à escola '{escola_manual}' em {data_visita:%d/%m/%Y} salva na planilha.")
+                    if gsheets_configurado():
+                        st.success(f"✅ Visita à escola '{escola_manual}' em {data_visita:%d/%m/%Y} salva na planilha do Google Drive.")
+                    else:
+                        st.warning("⚠️ Visita salva só temporariamente (modo local): o Google Sheets não está configurado. "
+                                   "Use '🔧 Testar conexão' na barra lateral.")
                     st.session_state["escola_selecionada_visita"] = escola_manual
                 except Exception as e:
                     st.error(f"Não foi possível salvar a visita: {e}")
