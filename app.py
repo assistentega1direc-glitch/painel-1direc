@@ -41,6 +41,23 @@ st.markdown("""
             .stMetric { padding: 10px !important; margin-bottom: 8px !important; }
             div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
         }
+        /* ===== IMPRESSÃO / PDF ===== */
+        @media print {
+            @page { size: A4 landscape; margin: 12mm; }
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            section[data-testid="stSidebar"], header[data-testid="stHeader"], [data-testid="stToolbar"],
+            [data-testid="stDecoration"], [data-testid="stStatusWidget"], footer, iframe[title="streamlit_app"],
+            .stButton, .stDownloadButton, [data-testid="stExpander"], [data-testid="stFileUploader"],
+            .viewerBadge_container__1QSob, [class*="viewerBadge"], .no-print { display: none !important; }
+            .main .block-container, [data-testid="stMainBlockContainer"], [data-testid="stAppViewBlockContainer"] {
+                max-width: 100% !important; width: 100% !important; padding: 0 !important; margin: 0 !important; }
+            [data-testid="stAppViewContainer"], [data-testid="stMain"], .main { margin-left: 0 !important; padding-left: 0 !important; }
+            /* não corta gráfico, tabela ou cartão no meio da página */
+            [data-testid="stPlotlyChart"], [data-testid="stDataFrame"], [data-testid="stMetric"], .stMetric {
+                break-inside: avoid !important; page-break-inside: avoid !important; }
+            h1, h2, h3 { break-after: avoid !important; page-break-after: avoid !important; }
+            .stMetric { box-shadow: none !important; }
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -376,6 +393,29 @@ def sobrescrever_base(df):
     else:
         df.to_csv(_csv_local(WS_BASE), index=False)
     ler_base_persistida.clear()
+
+
+def remover_linhas(nome, colunas, mascara_fn):
+    """Apaga as linhas em que mascara_fn(df) for True e regrava a aba (uso exclusivo do admin)."""
+    if gsheets_configurado():
+        ws, cab = _ws(nome, colunas)
+        valores = ws.get_all_values()
+        if len(valores) <= 1:
+            return 0
+        df = pd.DataFrame(valores[1:], columns=valores[0])
+        apagar = mascara_fn(df)
+        manter = df[~apagar]
+        ws.clear()
+        ws.update(values=[valores[0]] + manter.values.tolist(), range_name="A1", value_input_option="RAW")
+    else:
+        caminho = _csv_local(nome)
+        if not os.path.exists(caminho):
+            return 0
+        df = pd.read_csv(caminho, dtype=str, keep_default_na=False)
+        apagar = mascara_fn(df)
+        df[~apagar].to_csv(caminho, index=False)
+    ler_tabela.clear()
+    return int(apagar.sum())
 
 
 def apagar_base_persistida():
@@ -1066,8 +1106,10 @@ if aba == "Visão Geral":
                           var_name="Situação", value_name="Estudantes")
         ev_long["Situação"] = ev_long["Situação"].map({"Aprovados": AP, "Nao_Aprovados": NAP, "Nao_Avaliados": NAV})
         fig = px.line(ev_long, x="Data", y="Estudantes", color="Situação", markers=True, text="Estudantes",
-                      color_discrete_map=CORES_SIT)
-        fig.update_traces(textposition="top center")
+                      color_discrete_map=CORES_SIT, line_dash="Situação", symbol="Situação",
+                      line_dash_map={AP: "solid", NAP: "dash", NAV: "dot"},
+                      symbol_map={AP: "circle", NAP: "square", NAV: "diamond"})
+        fig.update_traces(textposition="top center", marker=dict(size=9), line=dict(width=3))
         v = visitas_filtradas()
         for d in sorted(v["_data"].dropna().dt.normalize().unique()) if len(v) else []:
             fig.add_vline(x=pd.Timestamp(d).timestamp() * 1000, line_dash="dot", line_color="#94a3b8")
@@ -1089,6 +1131,27 @@ if aba == "Visão Geral":
         tab["Data"] = tab["Data"].dt.strftime("%d/%m/%Y")
         tab = tab.rename(columns={"Nao_Aprovados": "Não aprovados", "Nao_Avaliados": "Não avaliados"})
         st.dataframe(tab, hide_index=True, use_container_width=True)
+
+    if st.session_state.is_admin and len(df_hist):
+        with st.expander("🔑 Admin: limpar marcos do gráfico de evolução"):
+            st.caption("Apaga apenas os pontos do gráfico (Historico_Situacao). A base de alunos e as visitas não mudam.")
+            marcos = (df_hist.groupby("Import_ID")
+                      .agg(Data=("Data_Referencia", "first"), Fonte=("Fonte", "first"), Registro=("Data_Registro", "first"))
+                      .reset_index().sort_values("Registro"))
+            rotulos = {r.Import_ID: f"{fmt_data_br(r.Data)} · {r.Fonte} · registrado em {r.Registro}"
+                       for r in marcos.itertuples()}
+            sel = st.multiselect("Marcos a excluir", list(rotulos), format_func=lambda k: rotulos[k])
+            confirma = st.checkbox("Confirmo a exclusão", key="conf_marcos")
+            c_a, c_b = st.columns(2)
+            if c_a.button("🗑️ Excluir marcos selecionados", disabled=not (sel and confirma)):
+                n = remover_linhas(WS_HIST, COLS_HIST, lambda d: d["Import_ID"].isin(sel))
+                st.success(f"{n} linha(s) removida(s).")
+                st.rerun()
+            if c_b.button("⚠️ Limpar todo o histórico", disabled=not confirma):
+                n = remover_linhas(WS_HIST, COLS_HIST, lambda d: d["Import_ID"].astype(str) != "")
+                st.session_state["_marco_inicial_ok"] = True  # não recria o marco inicial nesta sessão
+                st.success(f"Histórico limpo ({n} linha(s)). Registre um novo marco em 📁 Atualizar Base de Dados.")
+                st.rerun()
 
     log_f = df_log[df_log["Escola"].isin(escolas_f)] if len(df_log) else df_log
     if len(log_f):
@@ -1276,6 +1339,24 @@ elif aba == ABA_VISITAS:
         st.dataframe(vh[["Data da visita", "Escola", "Turno", "Articulador", "Atendidos",
                          "Aprovados_Liberados", "Presentes", "Registrado_por", "Observacoes", "Data_Registro"]],
                      hide_index=True, use_container_width=True)
+        if st.session_state.is_admin:
+            with st.expander("🔑 Admin: excluir visitas registradas"):
+                vh["_chave"] = vh["ID"].fillna("") + "|" + vh["Data_Registro"].fillna("") + "|" + vh["Escola"].fillna("")
+                rot_v = {
+                    k: f"{dv} · {esc} · {int(at)} atendidos · registro {dr}"
+                    for k, dv, esc, at, dr in zip(vh["_chave"], vh["Data da visita"], vh["Escola"],
+                                                  vh["Atendidos"], vh["Data_Registro"])}
+                sel_v = st.multiselect("Visitas a excluir", list(rot_v), format_func=lambda k: rot_v[k])
+                if st.button("🗑️ Excluir visitas selecionadas", disabled=not sel_v):
+                    def _mask(d):
+                        for c in ("ID", "Data_Registro", "Escola"):
+                            if c not in d.columns:
+                                d[c] = ""
+                        return (d["ID"].astype(str) + "|" + d["Data_Registro"].astype(str) + "|"
+                                + d["Escola"].astype(str)).isin(sel_v)
+                    n = remover_linhas(WS_VISITAS, COLS_VISITAS, _mask)
+                    st.success(f"{n} visita(s) removida(s).")
+                    st.rerun()
     else:
         st.markdown("<p style='color: #94a3b8; font-size: 13px;'>Nenhuma visita registrada na planilha até o momento.</p>",
                     unsafe_allow_html=True)
