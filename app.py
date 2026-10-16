@@ -171,9 +171,39 @@ def _cfg_gsheets():
         return None
 
 
+def _consertar_chave(chave):
+    """Remonta a private_key no formato PEM, tolerando \n literais, espaços e quebras de linha erradas."""
+    chave = str(chave).strip().strip('"').strip("'")
+    m = re.search(r"-----BEGIN PRIVATE KEY-----(.*?)-----END PRIVATE KEY-----", chave, re.S)
+    if not m:
+        return chave
+    corpo = m.group(1).replace("\\n", "").replace("\\r", "")
+    corpo = re.sub(r"[^A-Za-z0-9+/=]", "", corpo)
+    linhas = [corpo[i:i + 64] for i in range(0, len(corpo), 64)]
+    return "-----BEGIN PRIVATE KEY-----\n" + "\n".join(linhas) + "\n-----END PRIVATE KEY-----\n"
+
+
+def _info_conta():
+    """Credenciais da conta de serviço. Aceita o .json inteiro colado em
+    gcp_service_account_json = \'\'\'{ ... }\'\'\'  (recomendado) ou o bloco [gcp_service_account]."""
+    import json
+    try:
+        if "gcp_service_account_json" in st.secrets:
+            info = json.loads(str(st.secrets["gcp_service_account_json"]), strict=False)
+        elif "gcp_service_account" in st.secrets:
+            info = dict(st.secrets["gcp_service_account"])
+        else:
+            return None
+    except Exception:
+        return None
+    if "private_key" in info:
+        info["private_key"] = _consertar_chave(info["private_key"])
+    return info
+
+
 def gsheets_configurado():
     try:
-        return "gcp_service_account" in st.secrets and _cfg_gsheets() is not None
+        return _info_conta() is not None and _cfg_gsheets() is not None
     except Exception:
         return False
 
@@ -181,7 +211,7 @@ def gsheets_configurado():
 @st.cache_resource(show_spinner=False)
 def _abrir_planilha():
     import gspread
-    cliente = gspread.service_account_from_dict(dict(st.secrets["gcp_service_account"]))
+    cliente = gspread.service_account_from_dict(_info_conta())
     cfg = _cfg_gsheets() or {}
     ref = str(cfg.get("spreadsheet_id") or cfg.get("spreadsheet_url") or "").strip()
     m = re.search(r"/d/([A-Za-z0-9_-]+)", ref)   # aceita tanto o ID quanto o link completo
@@ -237,8 +267,12 @@ def diagnosticar_gsheets():
         return False, [f"❌ Os Secrets não puderam ser lidos (formato TOML inválido?). Detalhe: {e}"]
     if _cfg_gsheets() is None:
         msgs.append("❌ Falta o spreadsheet_id nos Secrets (bloco [gsheets]).")
-    if "gcp_service_account" not in chaves:
-        msgs.append("❌ Falta o bloco [gcp_service_account] nos Secrets (dados do arquivo .json).")
+    if _info_conta() is None:
+        if "gcp_service_account_json" in chaves:
+            msgs.append("❌ gcp_service_account_json não é um JSON válido: cole o conteúdo do arquivo .json inteiro, "
+                        "de { até }, entre três aspas simples.")
+        else:
+            msgs.append("❌ Faltam as credenciais da conta de serviço (gcp_service_account_json).")
     if msgs:
         msgs.append(f"Blocos encontrados nos Secrets: {chaves or 'nenhum'}")
         return False, msgs
@@ -248,11 +282,13 @@ def diagnosticar_gsheets():
         msgs.append("✅ Biblioteca gspread instalada.")
     except Exception:
         return False, msgs + ["❌ gspread não instalado: confira se o requirements.txt está na raiz do repositório."]
-    conta = st.secrets["gcp_service_account"]
+    conta = _info_conta()
     email = conta.get("client_email", "?")
     msgs.append(f"ℹ️ E-mail da conta de serviço: {email}")
     if "BEGIN PRIVATE KEY" not in str(conta.get("private_key", "")):
-        return False, msgs + ["❌ private_key inválida: copie o valor inteiro do .json, entre aspas, com os \\n."]
+        return False, msgs + ["❌ private_key inválida: use gcp_service_account_json com o .json inteiro."]
+    corpo = re.sub(r"-----[^-]+-----|\s", "", conta["private_key"])
+    msgs.append(f"ℹ️ Tamanho da chave: {len(corpo)} caracteres (o normal fica entre 1.620 e 1.630).")
     try:
         _abrir_planilha.clear()
         sh = _abrir_planilha()
