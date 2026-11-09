@@ -75,7 +75,8 @@ ORDEM_SIT = [AP, NAP, NAV]
 CORES_SIT = {AP: "#10b981", NAP: "#f43f5e", NAV: "#f59e0b"}
 
 COMP_COLS = ["Professor tutor", "Escola", "Matrícula", "Nome", "Série", "Componente",
-             "Rendimento", "Situação", "Status plataforma", "Plataforma", "Prova", "Atualizado em"]
+             "Rendimento", "Situação", "Status plataforma", "Plataforma", "Prova", "Atualizado em", "Origem"]
+ORIGEM_BASE_OFICIAL = "Base oficial"
 
 # Abas (worksheets) usadas na planilha do Google Drive
 WS_VISITAS = "Visitas"
@@ -457,9 +458,10 @@ def padronizar_comp(comp):
     comp = comp[COMP_COLS]
     comp["Matrícula"] = comp["Matrícula"].map(lambda v: key_mat(v) or str(v))
     for c in ["Professor tutor", "Escola", "Nome", "Série", "Componente", "Plataforma",
-              "Status plataforma", "Prova", "Atualizado em", "Rendimento"]:
+              "Status plataforma", "Prova", "Atualizado em", "Rendimento", "Origem"]:
         comp[c] = comp[c].fillna("").astype(str).str.strip()
     comp["Componente"] = comp["Componente"].str.replace(r"\s+", " ", regex=True)
+    comp.loc[comp["Origem"] == "", "Origem"] = ORIGEM_BASE_OFICIAL
     comp["Situação"] = comp["Situação"].map(norm_situacao)
     comp["Plataforma"] = comp["Plataforma"].map(lambda p: "Avalia" if "AVALIA" in norm_txt(p) else "Plurall")
     # Escola com grafia única (corrige escolas que apareciam duplicadas: MAIÚSCULA x Título, siglas etc.)
@@ -511,6 +513,7 @@ def consolidar_plataforma(comp):
         "Professor tutor": ("Professor tutor", "first"),
         "Escola": ("Escola", "first"),
         "Nome": ("Nome", "first"),
+        "Origem": ("Origem", "first"),
         "Série": ("Série", lambda x: " / ".join(sorted(set(v for v in x if v)))),
         "Componentes": ("Componente", "size"),
         "_nap": ("_nap", "any"),
@@ -532,6 +535,7 @@ def consolidar_alunos(cons):
     df = g.agg(**{
         "Nome": ("Nome", "first"),
         "Escola": ("Escola", "first"),
+        "Origem": ("Origem", lambda x: ORIGEM_BASE_OFICIAL if (x == ORIGEM_BASE_OFICIAL).any() else x.iloc[0]),
         "Professor tutor": ("Professor tutor", "first"),
         "Assessor(a)": ("Assessor(a)", "first"),
         "Plataforma": ("Plataforma", lambda x: " + ".join(sorted(set(x)))),
@@ -627,6 +631,8 @@ def preparar_plurall(raw, comp):
         "Prova": df[c_nome_prova].astype(str).str.strip() if c_nome_prova else df[c_prova].astype(str),
         "Status plataforma": df[c_sit].astype(str).str.strip(),
         "_rend": pd.to_numeric(df[c_rend], errors="coerce") if c_rend else pd.NA,
+        "Serie_raw": (df[c_nome_prova].astype(str).str.extract(r"(\d+\s*[ºªo°]\s*(?:ano|s[ée]rie))", flags=re.I)[0]
+                      .fillna("").str.upper() if c_nome_prova else ""),
     })
     out["Situação"] = out["Status plataforma"].map(norm_situacao)
     out["Rendimento"] = out["_rend"].map(lambda v: "—" if pd.isna(v) else f"{v:g}")
@@ -654,6 +660,7 @@ def preparar_avalia(raw):
         "Prova": "",
         "Status plataforma": df[c_sit].astype(str).str.strip(),
         "Rendimento": df[c_nota].astype(str).str.strip().replace({"-": "—", "nan": "—"}) if c_nota else "—",
+        "Serie_raw": df[_col(df, "SÉRIE")].astype(str).str.strip().str.upper() if _col(df, "SÉRIE") else "",
     })
     out["Situação"] = out["Status plataforma"].map(norm_situacao)
     prioridade = {"APROVADO": 5, "REPROVADO": 4, "AGENDADA": 3, "AGUARDANDO INICIO": 2, "NAO AGENDADA": 1}
@@ -662,48 +669,117 @@ def preparar_avalia(raw):
     return out, len(df)
 
 
-def aplicar_atualizacao(comp, novos, plataforma, data_ref_iso):
-    """Substitui, para cada (aluno, componente) presente no arquivo novo, as linhas da plataforma.
-    O que não aparece no arquivo novo é mantido como estava (nada é apagado por ausência)."""
+def aplicar_atualizacao(comp, novos, plataforma, data_ref_iso, incluir_novos=True):
+    """Atualiza a base com o arquivo da plataforma.
+    - Para cada (aluno, componente) do arquivo, substitui as linhas da plataforma.
+    - O que não aparece no arquivo é mantido (nada é apagado por ausência).
+    - APROVADO PREVALECE: componente já aprovado (em qualquer ciclo) não volta a ficar pendente.
+    - Estudantes que não estão na base são incluídos (incluir_novos=True), marcados na coluna Origem."""
     comp = comp.copy()
     comp["_mk"] = comp["Matrícula"].map(key_mat)
     comp["_ck"] = comp["Componente"].map(key_comp)
+    rotulo_novo = f"Incluído pela importação de {fmt_data_br(data_ref_iso)}"
 
-    novos = novos[novos["_mk"] != ""]
+    sem_matricula = novos[novos["_mk"] == ""]
+    novos = novos[novos["_mk"] != ""].copy()
     alunos_base = set(comp["_mk"])
+
+    # Mesmo aluno com matrícula diferente na base: casa por nome + escola (evita contar 2x)
+    remapeados = []
+    b = comp.drop_duplicates("_mk").copy()
+    b["_kne"] = b["Nome"].map(norm_txt) + "|" + b["Escola"].map(key_escola)
+    mapa_ne = b.drop_duplicates("_kne", keep=False).set_index("_kne")["_mk"]
+    fora_idx = ~novos["_mk"].isin(alunos_base)
+    for i in novos.index[fora_idx]:
+        k = norm_txt(novos.at[i, "Nome_raw"]) + "|" + key_escola(novos.at[i, "Escola_raw"])
+        if k in mapa_ne.index:
+            remapeados.append((novos.at[i, "_mk"], mapa_ne[k], novos.at[i, "Nome_raw"]))
+            novos.at[i, "_mk"] = mapa_ne[k]
+
     fora = novos[~novos["_mk"].isin(alunos_base)]
-    novos = novos[novos["_mk"].isin(alunos_base)]
+    meta_novos = pd.DataFrame()
+    if incluir_novos and len(fora):
+        escolas_base = comp.drop_duplicates("Escola")[["Escola"]].copy()
+        escolas_base["_ke"] = escolas_base["Escola"].map(key_escola)
+        canon = escolas_base.set_index("_ke")["Escola"].to_dict()
+        tutor_escola = (comp[comp["Professor tutor"] != ""].groupby("Escola")["Professor tutor"]
+                        .agg(lambda x: x.mode().iat[0]).to_dict())
+
+        def escola_canon(nome):
+            k = key_escola(nome)
+            if k in canon:
+                return canon[k]
+            for kb, nb in canon.items():  # nomes cortados / abreviados
+                if len(k) >= 25 and (kb.startswith(k) or k.startswith(kb)):
+                    return nb
+            return " ".join(str(nome).split()).upper()
+
+        f1 = fora.sort_values("Serie_raw", ascending=False).drop_duplicates("_mk")
+        meta_novos = pd.DataFrame({
+            "_mk": f1["_mk"].values,
+            "Matrícula": f1["_mk"].values,
+            "Nome": f1["Nome_raw"].map(lambda v: " ".join(str(v).split()).upper()).values,
+            "Escola": f1["Escola_raw"].map(escola_canon).values,
+            "Série": f1["Serie_raw"].values,
+        })
+        meta_novos["Professor tutor"] = meta_novos["Escola"].map(tutor_escola).fillna("Sem professor tutor")
+        meta_novos["Origem"] = rotulo_novo
+        meta_novos = meta_novos.set_index("_mk")
+        nao_incluidos = fora.iloc[0:0]
+    else:
+        nao_incluidos = fora
+        novos = novos[novos["_mk"].isin(alunos_base)]
 
     eh_plat = comp["Plataforma"] == plataforma
+
+    # Aprovado prevalece: se a base já tem o componente aprovado e o arquivo novo não traz aprovação, mantém
+    aprovados_base = set(zip(comp.loc[eh_plat & (comp["Situação"] == AP), "_mk"],
+                             comp.loc[eh_plat & (comp["Situação"] == AP), "_ck"]))
+    novo_tem_ap = novos.groupby(["_mk", "_ck"])["Situação"].agg(lambda x: (x == AP).any())
+    manter = {k for k, tem in novo_tem_ap.items() if (not tem) and k in aprovados_base}
+    if manter:
+        chave_novos = pd.Series(list(zip(novos["_mk"], novos["_ck"])), index=novos.index)
+        novos = novos[~chave_novos.isin(manter)]
+
     chaves_novas = pd.MultiIndex.from_arrays([novos["_mk"], novos["_ck"]]).unique()
     idx_comp = pd.MultiIndex.from_arrays([comp["_mk"], comp["_ck"]])
     substituir = eh_plat & idx_comp.isin(chaves_novas)
 
     chaves_base_plat = set(zip(comp.loc[eh_plat, "_mk"], comp.loc[eh_plat, "_ck"]))
-    n_novos_comp = sum(1 for k in zip(novos["_mk"], novos["_ck"]) if k not in chaves_base_plat)
+    alunos_novos = set(meta_novos.index)
+    n_novos_comp = sum(1 for k in zip(novos["_mk"], novos["_ck"])
+                       if k not in chaves_base_plat and k[0] not in alunos_novos)
 
-    # metadados do aluno: prioriza a linha da mesma plataforma
     meta = pd.concat([comp[eh_plat], comp[~eh_plat]]).drop_duplicates("_mk").set_index("_mk")
     nome_comp = (comp.drop_duplicates(["_mk", "_ck"]).set_index(["_mk", "_ck"])["Componente"])
     nome_comp_geral = comp.drop_duplicates("_ck").set_index("_ck")["Componente"]
 
     linhas = []
     for r in novos.to_dict("records"):
-        m = meta.loc[r["_mk"]]
+        m = meta.loc[r["_mk"]] if r["_mk"] in meta.index else meta_novos.loc[r["_mk"]]
         comp_nome = nome_comp.get((r["_mk"], r["_ck"])) or nome_comp_geral.get(r["_ck"]) or r["Componente_raw"]
         linhas.append({
             "Professor tutor": m["Professor tutor"], "Escola": m["Escola"], "Matrícula": m["Matrícula"],
             "Nome": m["Nome"], "Série": m["Série"], "Componente": comp_nome,
             "Rendimento": r["Rendimento"], "Situação": r["Situação"], "Status plataforma": r["Status plataforma"],
             "Plataforma": plataforma, "Prova": r["Prova"], "Atualizado em": data_ref_iso,
+            "Origem": m.get("Origem", ORIGEM_BASE_OFICIAL) or ORIGEM_BASE_OFICIAL,
         })
     novo_comp = pd.concat([comp.loc[~substituir, COMP_COLS], pd.DataFrame(linhas, columns=COMP_COLS)],
                           ignore_index=True)
+
+    incluidos = meta_novos.reset_index(drop=True)[["Matrícula", "Nome", "Escola", "Série", "Professor tutor"]] \
+        if len(meta_novos) else pd.DataFrame()
+    if len(incluidos):
+        incluidos["Plataforma"] = plataforma
     stats = {
         "linhas_validas": len(novos),
         "componentes_atualizados": int(substituir.sum()),
         "componentes_novos": n_novos_comp,
-        "fora_da_base": fora,
+        "aprovados_mantidos": len(manter),
+        "fora_da_base": pd.concat([sem_matricula, nao_incluidos]),
+        "incluidos": incluidos,
+        "remapeados": remapeados,
     }
     return novo_comp, stats
 
@@ -745,8 +821,8 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
     data_ref_iso = data_ref.isoformat()
     import_id = agora().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4]
     comp = comp_atual[COMP_COLS].copy()
-    total_lidas, atualizados, novos_comp = 0, 0, 0
-    fora_lista, fontes = [], []
+    total_lidas, atualizados, novos_comp, mantidos = 0, 0, 0, 0
+    fora_lista, fontes, incluidos_lista, remapeados = [], [], [], []
     for nome_arq, tipo, df in arquivos_lidos:
         if tipo == "Plurall":
             novos, lidas = preparar_plurall(df, comp)
@@ -756,10 +832,15 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
         total_lidas += lidas
         atualizados += stt["componentes_atualizados"]
         novos_comp += stt["componentes_novos"]
+        mantidos += stt["aprovados_mantidos"]
+        remapeados += stt["remapeados"]
+        if len(stt["incluidos"]):
+            incluidos_lista.append(stt["incluidos"])
         fontes.append(tipo)
         if len(stt["fora_da_base"]):
             f = stt["fora_da_base"][["_mk", "Nome_raw", "Escola_raw", "Componente_raw", "Situação"]].copy()
             f.columns = ["Matrícula", "Nome", "Escola", "Componente", "Situação"]
+            f["Matrícula"] = f["Matrícula"].replace("", "(sem matrícula/e-mail)")
             f["Plataforma"] = tipo
             fora_lista.append(f)
 
@@ -790,7 +871,9 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
     return {
         "import_id": import_id, "data_ref": data_ref_iso, "fonte": fonte_txt,
         "linhas_lidas": total_lidas, "atualizados": atualizados, "novos_comp": novos_comp,
-        "mudancas": mudancas, "fora": fora,
+        "mudancas": mudancas, "fora": fora, "aprovados_mantidos": mantidos, "remapeados": remapeados,
+        "incluidos": pd.concat(incluidos_lista, ignore_index=True).drop_duplicates("Matrícula")
+        if incluidos_lista else pd.DataFrame(),
     }
 
 
@@ -855,6 +938,7 @@ opcoes_menu = [
     ABA_VISITAS,
     "Detalhamento por Componentes",
     "📁 Atualizar Base de Dados",
+    "🧹 Limpeza do Redash",
     "Relatório Executivo / WhatsApp",
 ]
 KEY_ESC_FORM = "sel_escola_form"
@@ -882,6 +966,8 @@ st.sidebar.markdown("### 🎓 1ª DIREC - Natal/RN")
 st.sidebar.markdown("<p style='font-size: 12px; color: #64748b;'>Monitoramento de Ciclos, Visitas e Plataformas</p>",
                     unsafe_allow_html=True)
 st.sidebar.markdown("---")
+if "_ir_para_aba" in st.session_state:  # navegação pedida por um botão no rerun anterior
+    st.session_state["aba_ativa"] = st.session_state.pop("_ir_para_aba")
 aba = st.sidebar.radio("Navegação", opcoes_menu, key="aba_ativa")
 
 st.sidebar.markdown("---")
@@ -1276,6 +1362,9 @@ elif aba == ABA_VISITAS:
             st.markdown("##### 📋 Chamada / Presença de Campo:")
             # Presente/Ausente nas primeiras colunas para ficarem sempre visíveis (inclusive no celular)
             df_chamada = df_alunos_escola[["Nome", "Matrícula", "Série", "Plataforma", "Situação do aluno", "Pendências"]].copy()
+            # 🆕 = estudante incluído por importação (não estava na base oficial)
+            novos_esc = df_alunos_escola["Origem"] != ORIGEM_BASE_OFICIAL
+            df_chamada.loc[novos_esc.values, "Nome"] = "🆕 " + df_chamada.loc[novos_esc.values, "Nome"]
             df_chamada.insert(0, "Ausente", False)
             df_chamada.insert(0, "Presente", False)
             df_editado = st.data_editor(
@@ -1415,7 +1504,7 @@ elif aba == "Detalhamento por Componentes":
     st.info(f"Exibindo {len(exib)} de {q_total} componentes da unidade selecionada.")
     st.dataframe(
         exib[["Matrícula", "Nome", "Série", "Componente", "Plataforma", "Rendimento", "Situação",
-              "Status plataforma", "Atualizado em"]],
+              "Status plataforma", "Atualizado em", "Origem"]],
         hide_index=True, use_container_width=True,
         column_config={"Rendimento": st.column_config.TextColumn("Rendimento (Plurall %) / Nota (Avalia)")},
     )
@@ -1445,6 +1534,16 @@ elif aba == "📁 Atualizar Base de Dados":
         r4.metric("Novos aprovados", int((mud["Depois"] == AP).sum()) if len(mud) else 0)
         if rel["novos_comp"]:
             st.caption(f"ℹ️ {rel['novos_comp']} componente(s) que não constavam na base para o aluno foram incluídos.")
+        if rel.get("aprovados_mantidos"):
+            st.caption(f"🛡️ {rel['aprovados_mantidos']} componente(s) já aprovados foram mantidos como Aprovados, "
+                       "mesmo com resultado menor no arquivo novo (regra: aprovado prevalece).")
+        for antiga, nova, nome in rel.get("remapeados", [])[:20]:
+            st.caption(f"🔁 {nome}: matrícula {antiga} na plataforma foi ligada à matrícula {nova} da base (mesmo nome e escola).")
+        inc = rel.get("incluidos", pd.DataFrame())
+        if len(inc):
+            with st.expander(f"🆕 {len(inc)} estudante(s) que não estavam na base foram incluídos"):
+                st.caption("Escola, tutor e série vêm da planilha da plataforma. Só aparecem as provas que eles já fizeram.")
+                st.dataframe(inc, hide_index=True, use_container_width=True)
         if len(mud):
             with st.expander("Ver alunos que mudaram de situação", expanded=True):
                 st.dataframe(mud[["Escola", "Matrícula", "Nome", "Plataforma", "Antes", "Depois"]].sort_values(["Escola", "Nome"]),
@@ -1453,7 +1552,8 @@ elif aba == "📁 Atualizar Base de Dados":
             if len(regrediu):
                 st.warning(f"⚠️ {len(regrediu)} aluno(s) deixaram de constar como Aprovados — vale conferir na plataforma.")
         if len(rel["fora"]):
-            with st.expander(f"⚠️ {len(rel['fora'])} registro(s) de estudantes que não estão na base oficial (não importados)"):
+            with st.expander(f"⚠️ {len(rel['fora'])} registro(s) sem matrícula identificável (não importados)"):
+                st.caption("Linhas sem e-mail/matrícula na plataforma e cujo nome não foi encontrado na base.")
                 st.dataframe(rel["fora"], hide_index=True, use_container_width=True)
         if st.button("Fechar relatório"):
             del st.session_state["ultimo_relatorio"]
@@ -1540,6 +1640,71 @@ elif aba == "📁 Atualizar Base de Dados":
             recarregar_tudo()
             st.success("Base inicial restaurada.")
             st.rerun()
+
+# ==========================================
+# ABA 6B: LIMPEZA DIÁRIA DO REDASH
+# ==========================================
+elif aba == "🧹 Limpeza do Redash":
+    import limpeza_redash as lr
+
+    st.title("🧹 Limpeza diária do Redash")
+    st.markdown("Envie o Redash do dia. Componentes **aprovados no 1º ciclo continuam aprovados**, mesmo que o "
+                "2º ciclo mostre *Não aprovado* (prova não realizada ou nota menor). Regra de nota: 60% ou mais = aprovado.")
+
+    PASTA_REF = "referencias"
+    ref_c1 = os.path.join(PASTA_REF, "Redash_1o_ciclo.xlsx")
+    ref_ms = os.path.join(PASTA_REF, "Planilha_master_1o_ciclo.xlsx")
+
+    with st.expander("📚 Planilhas de referência do 1º ciclo", expanded=not os.path.exists(ref_c1)):
+        st.caption(f"Para não precisar enviar sempre, coloque no repositório: `{ref_c1}` e `{ref_ms}`. "
+                   "Antes de subir a master, apague as colunas de login e senha.")
+        up_c1 = st.file_uploader("Redash do 1º ciclo (ex.: Redash_extra_do_15.10)", type=["xlsx", "csv"], key="ref_c1")
+        up_ms = st.file_uploader("Planilha master do 1º ciclo (opcional)", type=["xlsx", "csv"], key="ref_ms")
+    fonte_c1 = up_c1 or (ref_c1 if os.path.exists(ref_c1) else None)
+    fonte_ms = up_ms or (ref_ms if os.path.exists(ref_ms) else None)
+    st.caption(f"1º ciclo: {'✅ ' + (getattr(fonte_c1, 'name', fonte_c1)) if fonte_c1 else '❌ falta enviar'} · "
+               f"Master: {'✅ ' + (getattr(fonte_ms, 'name', fonte_ms)) if fonte_ms else '— (opcional)'}")
+
+    up_dia = st.file_uploader("Redash do dia (.xlsx)", type=["xlsx", "csv"], key=f"up_dia_{st.session_state.get('lr_n', 0)}")
+    if up_dia is not None and fonte_c1 is not None:
+        data_padrao = lr.data_do_arquivo(up_dia.name, agora().date())
+        data_ref_lr = st.date_input("Data de referência", value=data_padrao, format="DD/MM/YYYY", key="lr_data")
+        try:
+            with st.spinner("Limpando..."):
+                df_dia = lr._ler(up_dia)
+                result, corrigidos, resumo = lr.limpar_redash(df_dia, lr._ler(fonte_c1),
+                                                              lr._ler(fonte_ms) if fonte_ms is not None else None)
+                xlsx = lr.gerar_excel(result, corrigidos, resumo, data_ref_lr)
+        except Exception as ex:
+            st.error(f"Não foi possível limpar a planilha: {ex}")
+            st.stop()
+
+        q = dict(zip(resumo["Indicador"], resumo["Quantidade"]))
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Linhas", q["Linhas da planilha"])
+        k2.metric("Corrigidas p/ Aprovado", q["Corrigidas para Aprovado (aprovação do 1º ciclo mantida)"])
+        k3.metric("Não aprovado", q["Não aprovado"])
+        k4.metric("Não avaliado", q["Não avaliado (prova do 2º ciclo não realizada)"])
+        st.download_button("⬇️ Baixar planilha limpa", xlsx, file_name=f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+        with st.expander(f"Ver os {len(corrigidos)} componentes corrigidos"):
+            st.dataframe(corrigidos, hide_index=True, use_container_width=True)
+
+        st.markdown("---")
+        st.markdown("**Atualizar o painel com esta planilha limpa** (equivale a importá-la na aba 📁 Atualizar Base de Dados).")
+        if st.button("🔄 Atualizar painel agora"):
+            with st.spinner("Atualizando o painel..."):
+                try:
+                    rel = processar_importacao([(f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx", "Plurall", result)],
+                                               data_ref_lr, df_comp, df_cons, MAPA_ART)
+                    st.session_state["ultimo_relatorio"] = rel
+                    st.session_state["lr_n"] = st.session_state.get("lr_n", 0) + 1
+                    st.session_state["_ir_para_aba"] = "📁 Atualizar Base de Dados"
+                    st.rerun()
+                except Exception as ex:
+                    st.error(f"Erro ao atualizar o painel: {ex}")
+    elif up_dia is not None:
+        st.warning("Envie primeiro o Redash do 1º ciclo (em 📚 Planilhas de referência).")
 
 # ==========================================
 # ABA 7: RELATÓRIO EXECUTIVO / WHATSAPP
