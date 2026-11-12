@@ -1,8 +1,12 @@
 """
 Limpeza diária do Redash (Plurall) — RAPP 2026 · 1ª DIREC
 
-Regra: componente APROVADO no 1º ciclo continua aprovado, mesmo que o Redash do
-2º ciclo mostre "Não aprovado" (prova não realizada ou nota menor).
+Regras (atualizadas em 12/11/2026):
+  - nota 0, sem tempo de prova e sem data de entrega -> Não avaliado (prova não realizada),
+    exceto se o componente foi NÃO APROVADO no 1º ciclo -> continua Não aprovado
+  - nota de 0 a 59, com tempo de prova e data de entrega -> Não aprovado
+  - nota de 60 a 100, com tempo de prova e data de entrega -> Aprovado
+  - componente aprovado no 1º ciclo -> o 1º ciclo prevalece (Aprovado)
 
 Uso no painel (Streamlit): aba "🧹 Limpeza do Redash".
 Uso pelo terminal:
@@ -40,6 +44,20 @@ def _mat(v):
         return ""
     m = re.match(r"\s*0*(\d+)", str(v))
     return m.group(1) if m else ""
+
+
+def _mat_email(v):
+    """Matrícula a partir do e-mail: só vale se a parte antes do @ for toda numérica (8+ dígitos).
+    E-mails fora do padrão (ex.: 1d.nome1234x@educar.rn.gov.br) ficam sem matrícula e são
+    identificados pelo nome + escola."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    local = str(v).strip().split("@")[0]
+    return local.lstrip("0") if local.isdigit() and len(local) >= 8 else ""
+
+
+def _vazio(v):
+    return v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() in ("", "nan", "NaT", "-", "—")
 
 
 def _col(df, *nomes):
@@ -86,7 +104,7 @@ def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"01ª DIREC|
     # chaves (matrícula a partir do e-mail; nome+escola quando não há e-mail)
     def chaves(d):
         ce, ca, cs, cp = _col(d, "email_aluno"), _col(d, "aluno"), _col(d, "escola"), _col(d, "prova")
-        d["_mk"] = d[ce].map(_mat) if ce else ""
+        d["_mk"] = d[ce].map(_mat_email) if ce else ""
         d["_kn"] = d[ca].map(_norm) if ca else ""
         d["_ks"] = d[cs].map(_norm) if cs else ""
         d["_ck"] = d[cp].map(_comp)
@@ -132,38 +150,62 @@ def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"01ª DIREC|
                 ok &= m[cplat].astype(str).str.contains("Plurall", case=False, na=False)
             alunos_ap = set(m.loc[ok, cm].map(_mat)) - {""}
 
-    # situação do 2º ciclo informada pela plataforma
-    cr, cpart, csit = _col(novo, "rendimento (%)", "rendimento"), _col(novo, "participação"), _col(novo, "Situação")
+    # ---------------- situação do 2º ciclo (regras de 12/11) ----------------
+    # 1) nota 0 SEM tempo de prova e SEM data de entrega  -> Não avaliado (prova não realizada)
+    #    ... mas se foi NÃO APROVADO no 1º ciclo, continua Não aprovado
+    # 2) nota 0 a 59 COM tempo de prova e data de entrega -> Não aprovado
+    # 3) nota 60 a 100 COM tempo de prova e data de entrega -> Aprovado
+    # 4) aprovado no 1º ciclo -> prevalece o 1º ciclo (Aprovado)
+    cr, csit = _col(novo, "rendimento (%)", "rendimento"), _col(novo, "Situação")
+    ctempo, cdata = _col(novo, "tempo de prova"), _col(novo, "data_entrega", "data de entrega")
     rend = pd.to_numeric(novo[cr], errors="coerce") if cr else pd.Series(pd.NA, index=novo.index)
-    if cpart:
-        part = novo[cpart].astype(str).str.upper().isin(["TRUE", "1", "SIM", "VERDADEIRO"])
-    else:
-        part = pd.Series(True, index=novo.index)
+    if ctempo and cdata:
+        tem_tempo = ~novo[ctempo].map(_vazio)
+        tem_data = ~novo[cdata].map(_vazio)
+    else:  # planilhas antigas, sem essas colunas: usa a participação (ou considera realizada)
+        cpart = _col(novo, "participação")
+        part = (novo[cpart].astype(str).str.upper().isin(["TRUE", "1", "SIM", "VERDADEIRO"])
+                if cpart else pd.Series(True, index=novo.index))
+        tem_tempo = tem_data = part
 
     def sit_plataforma(i):
-        if not part.at[i]:
-            return "Não realizou"
-        if csit and pd.notna(novo.at[i, csit]) and not cr:
-            return APROVADO if _norm(novo.at[i, csit]) == "APROVADO" else NAO_APROVADO
-        return APROVADO if pd.notna(rend.at[i]) and rend.at[i] >= NOTA_MINIMA else NAO_APROVADO
+        r = rend.at[i]
+        realizou = bool(tem_tempo.at[i]) and bool(tem_data.at[i])
+        if pd.isna(r) and csit and not cr:  # formato antigo, só com a coluna Situação
+            return (APROVADO if _norm(novo.at[i, csit]) == "APROVADO" else NAO_APROVADO), "ok"
+        r = 0 if pd.isna(r) else r
+        if realizou:
+            return (APROVADO if r >= NOTA_MINIMA else NAO_APROVADO), "ok"
+        if r == 0:  # só uma das duas colunas preenchida -> mantém Não avaliado, mas sinaliza
+            return "Não realizou", ("conferir" if (bool(tem_tempo.at[i]) or bool(tem_data.at[i])) else "ok")
+        # nota maior que 0 sem tempo/data: dado incompleto -> classifica pela nota e sinaliza
+        return (APROVADO if r >= NOTA_MINIMA else NAO_APROVADO), "conferir"
 
-    sit_plat = pd.Series({i: sit_plataforma(i) for i in novo.index})
+    calc = {i: sit_plataforma(i) for i in novo.index}
+    sit_plat = pd.Series({i: v[0] for i, v in calc.items()})
+    alerta = pd.Series({i: v[1] for i, v in calc.items()})
 
     situacao, motivo = [], []
     for i in novo.index:
         s, k = sit_plat.at[i], (novo.at[i, "_mk"], novo.at[i, "_ck"])
-        if s == APROVADO:
-            situacao.append(APROVADO); motivo.append("Aprovado no 2º ciclo")
-        elif k[0] and k in aprov1.index:
-            situacao.append(APROVADO); motivo.append(f"Aprovado no 1º ciclo ({aprov1[k]:g}%) — mantido")
+        aviso = " — nota sem tempo/data de entrega, conferir" if alerta.at[i] == "conferir" else ""
+        if k[0] and k in aprov1.index:
+            situacao.append(APROVADO)
+            motivo.append(f"Aprovado no 1º ciclo ({aprov1[k]:g}%) — prevalece" if s != APROVADO
+                          else f"Aprovado no 1º ciclo ({aprov1[k]:g}%) e no 2º ciclo")
         elif k[0] and k[0] in alunos_ap:
-            situacao.append(APROVADO); motivo.append("Aluno já aprovado em todos os componentes no 1º ciclo — mantido")
+            situacao.append(APROVADO); motivo.append("Aluno já aprovado em todos os componentes no 1º ciclo — prevalece")
+        elif s == APROVADO:
+            situacao.append(APROVADO); motivo.append("Aprovado no 2º ciclo (60% ou mais)" + aviso)
         elif s == "Não realizou" and k[0] and k in reprov1:
-            situacao.append(NAO_APROVADO); motivo.append("Não aprovado no 1º ciclo; prova do 2º ciclo não realizada")
+            situacao.append(NAO_APROVADO)
+            motivo.append("Não aprovado no 1º ciclo; prova do 2º ciclo não realizada — continua não aprovado")
         elif s == "Não realizou":
-            situacao.append(NAO_AVALIADO); motivo.append("Prova do 2º ciclo não realizada")
+            situacao.append(NAO_AVALIADO)
+            motivo.append("Prova do 2º ciclo não realizada (0%, sem tempo e sem data de entrega)" if not aviso
+                          else "Prova do 2º ciclo não realizada (0%; tempo ou data de entrega incompletos, conferir)")
         else:
-            situacao.append(NAO_APROVADO); motivo.append("Não aprovado no 2º ciclo")
+            situacao.append(NAO_APROVADO); motivo.append("Fez a prova do 2º ciclo e não atingiu 60%" + aviso)
 
     # monta a saída: colunas originais + 4 novas (a coluna "Situação" original, se houver, é substituída)
     result = df_novo.loc[novo.index].copy()
@@ -174,9 +216,11 @@ def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"01ª DIREC|
     result["Motivo da situação"] = motivo
     result["Corrigido?"] = [("Sim" if (s == APROVADO and p != APROVADO) else "")
                             for s, p in zip(situacao, sit_plat.values)]
+    result["Conferir?"] = ["Sim" if a == "conferir" else "" for a in alerta.values]
 
     cols_corr = [c for c in [_col(result, "escola"), _col(result, "aluno"), _col(result, "email_aluno"),
                              _col(result, "prova"), _col(result, "name"), _col(result, "rendimento (%)"),
+                             _col(result, "tempo de prova"), _col(result, "data_entrega"),
                              _col(result, "participação"), "Situação 2º ciclo (plataforma)", "Situação",
                              "Motivo da situação"] if c]
     corrigidos = result[result["Corrigido?"] == "Sim"][cols_corr]
@@ -186,13 +230,16 @@ def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"01ª DIREC|
 
     mk = novo["_mk"]
     resumo = pd.DataFrame({
-        "Indicador": ["Linhas da planilha", "Aprovadas no 2º ciclo",
-                      "Corrigidas para Aprovado (aprovação do 1º ciclo mantida)", "Não aprovado",
-                      "Não avaliado (prova do 2º ciclo não realizada)", "Estudantes com algum componente corrigido",
+        "Indicador": ["Linhas da planilha", "Aprovado (total)", "  aprovadas no 2º ciclo (60% ou mais)",
+                      "  corrigidas para Aprovado (aprovação do 1º ciclo prevalece)",
+                      "Não aprovado (fez a prova e não atingiu 60%, ou reprovado no 1º ciclo sem prova no 2º)",
+                      "Não avaliado (0%, sem tempo e sem data de entrega)",
+                      "Estudantes com algum componente corrigido", "Linhas para conferir (tempo/data incompletos)",
                       "Linhas sem matrícula identificada"],
-        "Quantidade": [len(result), motivo.count("Aprovado no 2º ciclo"), int((result["Corrigido?"] == "Sim").sum()),
-                       situacao.count(NAO_APROVADO), situacao.count(NAO_AVALIADO),
-                       int(mk[(result["Corrigido?"] == "Sim").values].nunique()), int((mk == "").sum())],
+        "Quantidade": [len(result), situacao.count(APROVADO), int((sit_plat == APROVADO).sum()),
+                       int((result["Corrigido?"] == "Sim").sum()), situacao.count(NAO_APROVADO),
+                       situacao.count(NAO_AVALIADO), int(mk[(result["Corrigido?"] == "Sim").values].nunique()),
+                       int((alerta == "conferir").sum()), int((mk == "").sum())],
     })
     return result, corrigidos, resumo
 

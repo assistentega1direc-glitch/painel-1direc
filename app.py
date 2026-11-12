@@ -606,7 +606,10 @@ def preparar_plurall(raw, comp):
     c_prova, c_nome_prova = _col(df, "prova"), _col(df, "name")
     c_rend, c_sit = _col(df, "rendimento (%)", "rendimento"), _col(df, "Situação")
 
-    df["_mk"] = df[c_email].astype(str).str.extract(r"^\s*(\d+)")[0].map(key_mat)
+    # matrícula só quando o e-mail é "<matrícula>@...": e-mails fora do padrão (ex.: 1d.nome@educar...)
+    # ficam sem matrícula e são identificados pelo nome + escola
+    _local = df[c_email].astype(str).str.strip().str.split("@").str[0]
+    df["_mk"] = _local.where(_local.str.fullmatch(r"\d{8,}"), "").map(lambda v: key_mat(v) if v else "")
     # Linhas sem e-mail: recupera a matrícula pelo nome (+ escola) do aluno na base
     sem = df["_mk"] == ""
     if sem.any() and c_aluno:
@@ -737,6 +740,14 @@ def aplicar_atualizacao(comp, novos, plataforma, data_ref_iso, incluir_novos=Tru
                              comp.loc[eh_plat & (comp["Situação"] == AP), "_ck"]))
     novo_tem_ap = novos.groupby(["_mk", "_ck"])["Situação"].agg(lambda x: (x == AP).any())
     manter = {k for k, tem in novo_tem_ap.items() if (not tem) and k in aprovados_base}
+    # Não aprovado no 1º ciclo + prova do 2º ciclo não realizada -> continua Não aprovado
+    # (só vale para reprovação do 1º ciclo: linhas da base sem prova do 2º ciclo)
+    eh_1c = ~comp["Prova"].astype(str).str.contains("2º", na=False)
+    nap_1c = set(zip(comp.loc[eh_plat & eh_1c & (comp["Situação"] == NAP), "_mk"],
+                     comp.loc[eh_plat & eh_1c & (comp["Situação"] == NAP), "_ck"]))
+    so_nav = novos.groupby(["_mk", "_ck"])["Situação"].agg(lambda x: (x == NAV).all())
+    manter_nap = {k for k, nav in so_nav.items() if nav and k in nap_1c}
+    manter |= manter_nap
     if manter:
         chave_novos = pd.Series(list(zip(novos["_mk"], novos["_ck"])), index=novos.index)
         novos = novos[~chave_novos.isin(manter)]
@@ -776,7 +787,8 @@ def aplicar_atualizacao(comp, novos, plataforma, data_ref_iso, incluir_novos=Tru
         "linhas_validas": len(novos),
         "componentes_atualizados": int(substituir.sum()),
         "componentes_novos": n_novos_comp,
-        "aprovados_mantidos": len(manter),
+        "aprovados_mantidos": len(manter) - len(manter_nap),
+        "nao_aprovados_mantidos": len(manter_nap),
         "fora_da_base": pd.concat([sem_matricula, nao_incluidos]),
         "incluidos": incluidos,
         "remapeados": remapeados,
@@ -821,7 +833,7 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
     data_ref_iso = data_ref.isoformat()
     import_id = agora().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:4]
     comp = comp_atual[COMP_COLS].copy()
-    total_lidas, atualizados, novos_comp, mantidos = 0, 0, 0, 0
+    total_lidas, atualizados, novos_comp, mantidos, nap_mantidos = 0, 0, 0, 0, 0
     fora_lista, fontes, incluidos_lista, remapeados = [], [], [], []
     for nome_arq, tipo, df in arquivos_lidos:
         if tipo == "Plurall":
@@ -833,6 +845,7 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
         atualizados += stt["componentes_atualizados"]
         novos_comp += stt["componentes_novos"]
         mantidos += stt["aprovados_mantidos"]
+        nap_mantidos += stt["nao_aprovados_mantidos"]
         remapeados += stt["remapeados"]
         if len(stt["incluidos"]):
             incluidos_lista.append(stt["incluidos"])
@@ -871,7 +884,7 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
     return {
         "import_id": import_id, "data_ref": data_ref_iso, "fonte": fonte_txt,
         "linhas_lidas": total_lidas, "atualizados": atualizados, "novos_comp": novos_comp,
-        "mudancas": mudancas, "fora": fora, "aprovados_mantidos": mantidos, "remapeados": remapeados,
+        "mudancas": mudancas, "fora": fora, "aprovados_mantidos": mantidos, "nao_aprovados_mantidos": nap_mantidos, "remapeados": remapeados,
         "incluidos": pd.concat(incluidos_lista, ignore_index=True).drop_duplicates("Matrícula")
         if incluidos_lista else pd.DataFrame(),
     }
@@ -1537,6 +1550,9 @@ elif aba == "📁 Atualizar Base de Dados":
         if rel.get("aprovados_mantidos"):
             st.caption(f"🛡️ {rel['aprovados_mantidos']} componente(s) já aprovados foram mantidos como Aprovados, "
                        "mesmo com resultado menor no arquivo novo (regra: aprovado prevalece).")
+        if rel.get("nao_aprovados_mantidos"):
+            st.caption(f"📌 {rel['nao_aprovados_mantidos']} componente(s) não aprovados no 1º ciclo e sem prova feita no "
+                       "2º ciclo continuam como Não aprovados.")
         for antiga, nova, nome in rel.get("remapeados", [])[:20]:
             st.caption(f"🔁 {nome}: matrícula {antiga} na plataforma foi ligada à matrícula {nova} da base (mesmo nome e escola).")
         inc = rel.get("incluidos", pd.DataFrame())
@@ -1648,8 +1664,10 @@ elif aba == "🧹 Limpeza do Redash":
     import limpeza_redash as lr
 
     st.title("🧹 Limpeza diária do Redash")
-    st.markdown("Envie o Redash do dia. Componentes **aprovados no 1º ciclo continuam aprovados**, mesmo que o "
-                "2º ciclo mostre *Não aprovado* (prova não realizada ou nota menor). Regra de nota: 60% ou mais = aprovado.")
+    st.markdown("Envie o Redash do dia. Regras: **nota 0 sem tempo de prova e sem data de entrega = Não avaliado**; "
+                "com tempo e data de entrega, **0 a 50% = Não aprovado** e **60 a 100% = Aprovado**. "
+                "Componente **aprovado no 1º ciclo continua aprovado** (o 1º ciclo prevalece) e componente "
+                "**não aprovado no 1º ciclo sem prova feita no 2º continua não aprovado**.")
 
     PASTA_REF = "referencias"
     ref_c1 = os.path.join(PASTA_REF, "Redash_1o_ciclo.xlsx")
@@ -1681,10 +1699,14 @@ elif aba == "🧹 Limpeza do Redash":
 
         q = dict(zip(resumo["Indicador"], resumo["Quantidade"]))
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Linhas", q["Linhas da planilha"])
-        k2.metric("Corrigidas p/ Aprovado", q["Corrigidas para Aprovado (aprovação do 1º ciclo mantida)"])
-        k3.metric("Não aprovado", q["Não aprovado"])
-        k4.metric("Não avaliado", q["Não avaliado (prova do 2º ciclo não realizada)"])
+        k1.metric("Aprovado", q["Aprovado (total)"],
+                  help=f"Inclui {q['  corrigidas para Aprovado (aprovação do 1º ciclo prevalece)']} aprovações do 1º ciclo mantidas")
+        k2.metric("Não aprovado", q["Não aprovado (fez a prova e não atingiu 60%, ou reprovado no 1º ciclo sem prova no 2º)"])
+        k3.metric("Não avaliado", q["Não avaliado (0%, sem tempo e sem data de entrega)"])
+        k4.metric("Corrigidas p/ Aprovado (1º ciclo)", q["  corrigidas para Aprovado (aprovação do 1º ciclo prevalece)"])
+        if q["Linhas para conferir (tempo/data incompletos)"]:
+            st.warning(f"{q['Linhas para conferir (tempo/data incompletos)']} linha(s) com tempo de prova ou data de entrega incompletos "
+                       "(coluna 'Conferir?' na planilha).")
         st.download_button("⬇️ Baixar planilha limpa", xlsx, file_name=f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         with st.expander(f"Ver os {len(corrigidos)} componentes corrigidos"):
