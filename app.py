@@ -609,7 +609,7 @@ def preparar_plurall(raw, comp):
     # matrícula só quando o e-mail é "<matrícula>@...": e-mails fora do padrão (ex.: 1d.nome@educar...)
     # ficam sem matrícula e são identificados pelo nome + escola
     _local = df[c_email].astype(str).str.strip().str.split("@").str[0]
-    df["_mk"] = _local.where(_local.str.fullmatch(r"\d{8,}"), "").map(lambda v: key_mat(v) if v else "")
+    df["_mk"] = _local.where(_local.str.fullmatch(r"\d{8,}", na=False), "").map(lambda v: key_mat(v) if v else "")
     # Linhas sem e-mail: recupera a matrícula pelo nome (+ escola) do aluno na base
     sem = df["_mk"] == ""
     if sem.any() and c_aluno:
@@ -891,6 +891,353 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
 
 
 # ============================================================
+# PLANILHA COMPLETA · EJA · NOVATOS · EXTRAÇÃO POR ESCOLA
+# ============================================================
+PASTA_REF = "referencias"
+REF_C1 = os.path.join(PASTA_REF, "Redash_1o_ciclo.xlsx")
+REF_MASTER = os.path.join(PASTA_REF, "Planilha_master_1o_ciclo.xlsx")
+PADRAO_EJA = r"PER[IÍ]ODO|TURMA\s+II\b|SEMESTRE|M[OÓ]DULO|\bEJA\b"
+SEM_COMPONENTE = "(sem componente informado)"
+COR_EJA, COR_NOVATO, COR_NOVO_HOJE = "DBEAFE", "FEF3C7", "FED7AA"   # azul, amarelo, laranja
+COR_FONTE_SIT = {AP: "047857", NAP: "BE123C", NAV: "B45309"}
+TURNOS_TURMA = {"M": "MATUTINO", "V": "VESPERTINO", "N": "NOTURNO", "INT": "INTEGRAL", "I": "INTEGRAL"}
+
+
+def _juntar(valores):
+    vistos = {}
+    for v in valores:
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            continue
+        s = " ".join(str(v).split())
+        if s and s not in ("-", "—", "nan") and s.upper() not in vistos:
+            vistos[s.upper()] = s
+    return " / ".join(sorted(vistos.values()))
+
+
+def _mtime(caminho):
+    return os.path.getmtime(caminho) if os.path.exists(caminho) else 0
+
+
+@st.cache_data(show_spinner=False)
+def carregar_referencias(mt_master, mt_c1):
+    """Cadastro da planilha master (série, turno...) e chaves de quem já existia no 1º ciclo
+    (master + Redash do 1º ciclo). Usado para marcar EJA e novatos."""
+    cad = pd.DataFrame(columns=["Escola", "Nome", "Professor tutor", "Plataforma", "Série master", "Turno master"])
+    mks, nomes = set(), set()
+    if mt_master:
+        m = pd.read_excel(REF_MASTER, dtype=str)
+        c_mat, c_nome, c_esc = _col(m, "Matrícula"), _col(m, "Nome"), _col(m, "Escola")
+        c_serie, c_turno = _col(m, "Série"), _col(m, "TURNO", "Turno")
+        c_tutor, c_plat = _col(m, "Professor tutor"), _col(m, "Plataforma")
+        m["_mk"] = m[c_mat].map(key_mat)
+        m = m[m["_mk"] != ""]
+        agg = {"Escola": (c_esc, "first"), "Nome": (c_nome, "first")}
+        if c_tutor:
+            agg["Professor tutor"] = (c_tutor, "first")
+        if c_plat:
+            agg["Plataforma"] = (c_plat, "first")
+        if c_serie:
+            agg["Série master"] = (c_serie, _juntar)
+        if c_turno:
+            agg["Turno master"] = (c_turno, lambda x: _juntar(str(v).strip().upper() for v in x if pd.notna(v)))
+        cad = m.groupby("_mk").agg(**agg)
+        mks |= set(m["_mk"])
+        nomes |= set(m[c_nome].map(norm_txt))
+    if mt_c1:
+        r = pd.read_excel(REF_C1)
+        ce, ca = _col(r, "email_aluno"), _col(r, "aluno")
+        if ce:
+            loc = r[ce].astype(str).str.strip().str.split("@").str[0]
+            mks |= set(loc[loc.str.fullmatch(r"\d{8,}", na=False)].map(key_mat))
+        if ca:
+            nomes |= set(r[ca].map(norm_txt))
+    return cad, mks, nomes
+
+
+def referencias_1o_ciclo():
+    return carregar_referencias(_mtime(REF_MASTER), _mtime(REF_C1))
+
+
+def situacao_eja(serie):
+    """'Sim' se a série é de EJA (períodos, turma II, semestre, módulo); avisa quando também há série regular."""
+    partes = [p.strip() for p in str(serie or "").split(" / ") if p.strip()]
+    eja = [p for p in partes if re.search(PADRAO_EJA, p, flags=re.I)]
+    if not eja:
+        return ""
+    return "Sim" if len(eja) == len(partes) else "Sim (conferir: também aparece em série regular)"
+
+
+def turmas_do_redash(df_redash):
+    """matrícula -> turma(s) e turno atuais, lidos do class_name do Redash do dia."""
+    if df_redash is None:
+        return None
+    ce, ct = _col(df_redash, "email_aluno"), _col(df_redash, "class_name")
+    if not (ce and ct):
+        return None
+    loc = df_redash[ce].astype(str).str.strip().str.split("@").str[0]
+    d = pd.DataFrame({"_mk": loc.where(loc.str.fullmatch(r"\d{8,}", na=False), "").map(lambda v: key_mat(v) if v else ""),
+                      "Turma": df_redash[ct].astype(str).str.strip()})
+    d = d[d["_mk"] != ""]
+    d["Turno turma"] = d["Turma"].str.split("-").str[1].map(lambda c: TURNOS_TURMA.get(str(c).upper(), ""))
+    return d.groupby("_mk").agg(Turma=("Turma", _juntar), **{"Turno turma": ("Turno turma", _juntar)})
+
+
+def _fmt_nota(nota, plataforma, situacao=None):
+    s = str(nota).strip()
+    if s in ("", "—", "-", "nan", "None") or (situacao == NAV and s in ("0", "0.0")):
+        return "sem nota"
+    return f"{s}%" if plataforma == "Plurall" else s
+
+
+def montar_tabelas(comp, data_ref_iso=None, turmas=None, comp_painel=None):
+    """Monta (estudantes, componentes) com série, turno, EJA e novatos.
+    Novato = estudante que não está na base oficial, na planilha master nem no Redash do 1º ciclo.
+    comp_painel (opcional): base atual do painel, para saber em que data cada novato entrou."""
+    cad, mks_1c, nomes_1c = referencias_1o_ciclo()
+    c = comp.copy()
+    c["_mk"] = c["Matrícula"].map(key_mat)
+    if c.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    data_ref_br = fmt_data_br(data_ref_iso) if data_ref_iso else ""
+
+    # data em que cada estudante incluído entrou (o painel guarda na coluna Origem)
+    entrada = {}
+    fontes = ([comp_painel] if comp_painel is not None else []) + [c]
+    for f in fontes:
+        f = f[f["Origem"].astype(str).str.startswith("Incluído")]
+        for mk, o in zip(f["Matrícula"].map(key_mat), f["Origem"]):
+            m_ = re.search(r"(\d{2}/\d{2}/\d{4})", str(o))
+            entrada.setdefault(mk, m_.group(1) if m_ else "")
+    oficiais = set(c.loc[c["Origem"] == ORIGEM_BASE_OFICIAL, "_mk"])
+
+    c["Nota"] = [_fmt_nota(n, p, st_) for n, p, st_ in zip(c["Rendimento"], c["Plataforma"], c["Situação"])]
+    c["_nota_txt"] = c["Componente"] + " (" + c["Plataforma"] + "): " + c["Nota"] + " – " + c["Situação"]
+    c["_pend_txt"] = (c["Componente"] + " (" + c["Situação"] + ")").where(c["Situação"] != AP)
+
+    g = c.groupby("_mk", sort=False)
+    est = g.agg(**{
+        "Escola": ("Escola", "first"), "Professor tutor": ("Professor tutor", "first"),
+        "Matrícula": ("Matrícula", "first"), "Nome": ("Nome", "first"), "Série": ("Série", _juntar),
+        "Plataformas": ("Plataforma", _juntar), "Origem": ("Origem", "first"),
+        "Situação do aluno": ("Situação", situacao_agregada),
+        "Componentes": ("Componente", "size"),
+        "Notas por componente": ("_nota_txt", lambda x: "; ".join(x)),
+        "Pendências": ("_pend_txt", lambda x: "; ".join(v for v in x.dropna())),
+    })
+    sit_plat = c.groupby(["_mk", "Plataforma"])["Situação"].agg(situacao_agregada).unstack()
+    for p in ("Plurall", "Avalia"):
+        est[f"Situação {p}"] = sit_plat[p] if p in sit_plat.columns else pd.NA
+        est[f"Situação {p}"] = est[f"Situação {p}"].fillna("—")
+
+    # série e turno: base + planilha master; turma e turno atuais: Redash do dia
+    est["Série"] = [_juntar([s, cad["Série master"].get(k, "") if "Série master" in cad else ""])
+                    for k, s in zip(est.index, est["Série"])]
+    turno_m = cad["Turno master"] if "Turno master" in cad else pd.Series(dtype=str)
+    if turmas is not None and len(turmas):
+        est["Turma (Redash)"] = est.index.map(lambda k: turmas["Turma"].get(k, ""))
+        t_atual = est.index.map(lambda k: turmas["Turno turma"].get(k, ""))
+    else:
+        est["Turma (Redash)"] = ""
+        t_atual = [""] * len(est)
+    est["Turno"] = [t or turno_m.get(k, "") for k, t in zip(est.index, t_atual)]
+    est["EJA"] = est["Série"].map(situacao_eja)
+
+    def novato(k, nome, origem):
+        if k in oficiais or k in mks_1c or norm_txt(nome) in nomes_1c:
+            return ""
+        d = entrada.get(k, "")
+        if data_ref_br and d == data_ref_br:
+            return f"Novo hoje ({d})"
+        return f"Novato desde {d}" if d else "Novato"
+    est["Novato"] = [novato(k, n, o) for k, n, o in zip(est.index, est["Nome"], est["Origem"])]
+    est["Observação"] = ""
+    est.loc[est["Origem"].astype(str).str.startswith("Incluído") & (est["Novato"] == ""),
+            "Observação"] = "Fora da planilha master, mas já fez prova no 1º ciclo"
+    est.loc[(est["Notas por componente"].str.contains(re.escape(SEM_COMPONENTE))) & (est["Componentes"] == 1),
+            "Observação"] = "Está na planilha master sem componentes informados"
+
+    cols_est = ["Escola", "Professor tutor", "Matrícula", "Nome", "Série", "Turno", "Turma (Redash)", "EJA", "Novato",
+                "Situação do aluno", "Situação Plurall", "Situação Avalia", "Componentes", "Notas por componente",
+                "Pendências", "Observação"]
+    est = est.sort_values(["Escola", "Nome"])[cols_est].reset_index(drop=True)
+
+    flags = est.set_index(est["Matrícula"].map(key_mat))[["Série", "Turno", "EJA", "Novato"]]
+    comp_out = c.drop(columns=["Série"]).join(flags, on="_mk")
+    comp_out["Prova"] = comp_out["Prova"].replace("", "—")
+    cols_comp = ["Escola", "Professor tutor", "Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Plataforma",
+                 "Componente", "Nota", "Situação", "Status plataforma", "Prova", "Atualizado em"]
+    comp_out = comp_out.sort_values(["Escola", "Nome", "Plataforma", "Componente"])[cols_comp].reset_index(drop=True)
+    return est, comp_out
+
+
+def resumo_por_escola(est):
+    if est.empty:
+        return pd.DataFrame()
+    r = est.groupby("Escola").agg(
+        Estudantes=("Matrícula", "size"),
+        Aprovados=("Situação do aluno", lambda x: int((x == AP).sum())),
+        **{"Não aprovados": ("Situação do aluno", lambda x: int((x == NAP).sum())),
+           "Não avaliados": ("Situação do aluno", lambda x: int((x == NAV).sum())),
+           "EJA": ("EJA", lambda x: int((x != "").sum())),
+           "Novatos": ("Novato", lambda x: int((x != "").sum())),
+           "Novos hoje": ("Novato", lambda x: int(x.str.startswith("Novo hoje").sum()))})
+    r["Pendentes"] = r["Não aprovados"] + r["Não avaliados"]
+    r["% aprovados"] = (100 * r["Aprovados"] / r["Estudantes"]).round(1)
+    return r.reset_index()[["Escola", "Estudantes", "Aprovados", "Não aprovados", "Não avaliados", "Pendentes",
+                            "% aprovados", "EJA", "Novatos", "Novos hoje"]].sort_values("Pendentes", ascending=False)
+
+
+def resumo_geral(est, titulo, data_ref_iso=None, extras=None):
+    vc = est["Situação do aluno"].value_counts() if len(est) else pd.Series(dtype=int)
+    linhas = [[titulo, ""]]
+    if data_ref_iso:
+        linhas.append(["Data de referência", fmt_data_br(data_ref_iso)])
+    linhas += [
+        ["Estudantes", len(est)],
+        ["  Aprovados (sem pendência)", int(vc.get(AP, 0))],
+        ["  Não aprovados", int(vc.get(NAP, 0))],
+        ["  Não avaliados", int(vc.get(NAV, 0))],
+        ["Estudantes de EJA", int((est["EJA"] != "").sum()) if len(est) else 0],
+        ["Novatos (não estavam no 1º ciclo)", int((est["Novato"] != "").sum()) if len(est) else 0],
+        ["  entraram na planilha pela 1ª vez hoje", int(est["Novato"].str.startswith("Novo hoje").sum()) if len(est) else 0],
+    ]
+    linhas += extras or []
+    linhas += [["", ""], ["LEGENDA DAS CORES", ""],
+               ["Linha laranja", "Novato que aparece pela primeira vez nesta planilha (novo hoje)"],
+               ["Linha amarela", "Novato: não estava na planilha master nem no Redash do 1º ciclo"],
+               ["Linha azul / célula EJA azul", "Estudante de EJA (série em períodos, turma II, semestre ou módulo)"],
+               ["Situação do aluno", "Aprovado = sem pendência; Não aprovado = reprovou em algum componente; "
+                                     "Não avaliado = tem prova não realizada (e nenhuma reprovação)"]]
+    return pd.DataFrame(linhas, columns=["Indicador", "Valor"])
+
+
+def excel_rapp(abas):
+    """abas: {nome: DataFrame}. Linhas pintadas: novo hoje (laranja), novato (amarelo), EJA (azul)."""
+    import io
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        for nome, df in abas.items():
+            df.to_excel(w, sheet_name=nome[:31], index=False)
+        for nome, df in abas.items():
+            ws = w.sheets[nome[:31]]
+            for cel in ws[1]:
+                cel.font = Font(bold=True, color="FFFFFF")
+                cel.fill = PatternFill("solid", fgColor="1F4E79")
+                cel.alignment = Alignment(wrap_text=True, vertical="center")
+            for i, col in enumerate(df.columns, start=1):
+                amostra = [str(col)] + [str(v) for v in df[col].head(300)]
+                larg = max(len(s) for s in amostra) + 2
+                ws.column_dimensions[get_column_letter(i)].width = min(60 if "Notas" not in str(col) else 90, max(10, larg))
+            ws.freeze_panes = "A2"
+            if len(df):
+                ws.auto_filter.ref = ws.dimensions
+            cols = list(df.columns)
+            i_sit = [cols.index(c) + 1 for c in cols if str(c).startswith("Situação")]
+            i_eja = cols.index("EJA") + 1 if "EJA" in cols else None
+            tem_flags = "Novato" in cols and "EJA" in cols
+            if not (tem_flags or i_sit):
+                continue
+            nov = df["Novato"].astype(str).tolist() if tem_flags else [""] * len(df)
+            eja = df["EJA"].astype(str).tolist() if tem_flags else [""] * len(df)
+            fill_nh, fill_nv, fill_eja = (PatternFill("solid", fgColor=c) for c in (COR_NOVO_HOJE, COR_NOVATO, COR_EJA))
+            fontes = {s: Font(bold=True, color=c) for s, c in COR_FONTE_SIT.items()}
+            for r, linha in enumerate(ws.iter_rows(min_row=2, max_row=len(df) + 1), start=0):
+                n_, e_ = nov[r], eja[r]
+                fill = fill_nh if n_.startswith("Novo hoje") else fill_nv if n_ else fill_eja if e_ else None
+                if fill is not None:
+                    for cel in linha:
+                        cel.fill = fill
+                if e_ and i_eja:
+                    linha[i_eja - 1].fill = fill_eja
+                for j in i_sit:
+                    f_ = fontes.get(linha[j - 1].value)
+                    if f_ is not None:
+                        linha[j - 1].font = f_
+    return buf.getvalue()
+
+
+def montar_planilha_completa(result_limpo, df_avalia, data_ref, comp_painel=None):
+    """Base oficial do 1º ciclo (planilha tratada + master) + Redash do dia já limpo + Avalia mais recente.
+    Traz TODOS os estudantes, inclusive os não avaliados que não aparecem no Redash do dia.
+    Não altera a base do painel."""
+    iso = data_ref.isoformat()
+    comp0, _ = carregar_base_inicial(EXCEL_DEFAULT, os.path.getmtime(EXCEL_DEFAULT))
+    comp = comp0[COMP_COLS].copy()
+
+    # estudantes da master que não estão na planilha tratada (a master não informa os componentes)
+    cad, _, _ = referencias_1o_ciclo()
+    ja_na_base = set(comp["Matrícula"].map(key_mat))
+    faltam = [k for k in cad.index if k not in ja_na_base]
+    if faltam:
+        extra = pd.DataFrame([{
+            "Professor tutor": cad.at[k, "Professor tutor"] if "Professor tutor" in cad else "",
+            "Escola": cad.at[k, "Escola"], "Matrícula": k, "Nome": cad.at[k, "Nome"],
+            "Série": cad.at[k, "Série master"] if "Série master" in cad else "", "Componente": SEM_COMPONENTE,
+            "Rendimento": "—", "Situação": NAV, "Status plataforma": "Sem componente informado",
+            "Plataforma": cad.at[k, "Plataforma"] if "Plataforma" in cad and pd.notna(cad.at[k, "Plataforma"]) else "Plurall",
+            "Prova": "", "Atualizado em": "", "Origem": ORIGEM_BASE_OFICIAL} for k in faltam], columns=COMP_COLS)
+        comp = padronizar_comp(pd.concat([comp, extra], ignore_index=True))
+
+    stats = {}
+    novos_p, _ = preparar_plurall(result_limpo, comp)
+    comp, stats["Plurall"] = aplicar_atualizacao(comp, novos_p, "Plurall", iso)
+    if df_avalia is not None:
+        novos_a, _ = preparar_avalia(df_avalia)
+        comp, stats["Avalia"] = aplicar_atualizacao(comp, novos_a, "Avalia", iso)
+    # o "sem componente" sai quando o estudante passa a ter componentes de verdade
+    mk_comp = comp["Matrícula"].map(key_mat)
+    reais = set(mk_comp[comp["Componente"] != SEM_COMPONENTE])
+    comp = padronizar_comp(comp[~((comp["Componente"] == SEM_COMPONENTE) & mk_comp.isin(reais))])
+
+    est, comp_out = montar_tabelas(comp, iso, turmas_do_redash(result_limpo), comp_painel)
+
+    sem = []
+    for plat, s in stats.items():
+        f = s["fora_da_base"]
+        if len(f):
+            f = f[["Nome_raw", "Escola_raw", "Componente_raw", "Rendimento", "Situação"]].copy()
+            f.columns = ["Nome", "Escola", "Componente", "Nota", "Situação"]
+            f.insert(0, "Plataforma", plat)
+            sem.append(f)
+    sem = pd.concat(sem, ignore_index=True) if sem else pd.DataFrame(columns=["Plataforma", "Nome", "Escola", "Componente", "Nota", "Situação"])
+    n_sem = sem.drop_duplicates(["Nome", "Escola"]).shape[0] if len(sem) else 0
+    resumo = resumo_geral(est, "Planilha completa RAPP · 1ª DIREC", iso, extras=[
+        ["Estudantes sem matrícula no Redash (fora da planilha, ver aba 'Sem matrícula')", n_sem],
+        ["Fontes", "Planilha tratada + master + Redash do 1º ciclo (fim do 1º ciclo), Redash do dia limpo"
+                   + (" e Avalia mais recente" if df_avalia is not None else " (Avalia não enviado: mantida a situação anterior)")],
+    ])
+    return {"estudantes": est, "componentes": comp_out, "sem_matricula": sem, "resumo": resumo,
+            "por_escola": resumo_por_escola(est), "comp": comp}
+
+
+def planilha_completa_excel(pc):
+    est = pc["estudantes"]
+    return excel_rapp({
+        "Resumo": pc["resumo"],
+        "Estudantes": est,
+        "Componentes": pc["componentes"],
+        "Por escola": pc["por_escola"],
+        "Novatos": est[est["Novato"] != ""],
+        "EJA": est[est["EJA"] != ""],
+        "Sem matrícula": pc["sem_matricula"],
+    })
+
+
+def estilo_linhas(df):
+    """Mesmas cores do Excel para st.dataframe."""
+    cores = {"nh": f"background-color: #{COR_NOVO_HOJE}", "nv": f"background-color: #{COR_NOVATO}",
+             "eja": f"background-color: #{COR_EJA}"}
+
+    def pinta(row):
+        n_, e_ = str(row.get("Novato", "")), str(row.get("EJA", ""))
+        css = cores["nh"] if n_.startswith("Novo hoje") else cores["nv"] if n_ else cores["eja"] if e_ else ""
+        return [css] * len(row)
+    return df.style.apply(pinta, axis=1)
+
+
+# ============================================================
 # CARREGAMENTO PRINCIPAL
 # ============================================================
 if not os.path.exists(EXCEL_DEFAULT):
@@ -944,6 +1291,7 @@ ESCOLAS = sorted(df_cons["Escola"].unique())
 # NAVEGAÇÃO
 # ============================================================
 ABA_VISITAS = "Registro de Visitas & Campo"
+ABA_ESCOLA = "🏫 Dados de uma Escola"
 opcoes_menu = [
     "Visão Geral",
     "Escolas Prioritárias (25)",
@@ -952,6 +1300,7 @@ opcoes_menu = [
     "Detalhamento por Componentes",
     "📁 Atualizar Base de Dados",
     "🧹 Limpeza do Redash",
+    ABA_ESCOLA,
     "Relatório Executivo / WhatsApp",
 ]
 KEY_ESC_FORM = "sel_escola_form"
@@ -1669,13 +2018,11 @@ elif aba == "🧹 Limpeza do Redash":
                 "Componente **aprovado no 1º ciclo continua aprovado** (o 1º ciclo prevalece) e componente "
                 "**não aprovado no 1º ciclo sem prova feita no 2º continua não aprovado**.")
 
-    PASTA_REF = "referencias"
-    ref_c1 = os.path.join(PASTA_REF, "Redash_1o_ciclo.xlsx")
-    ref_ms = os.path.join(PASTA_REF, "Planilha_master_1o_ciclo.xlsx")
-
+    ref_c1, ref_ms = REF_C1, REF_MASTER
     with st.expander("📚 Planilhas de referência do 1º ciclo", expanded=not os.path.exists(ref_c1)):
         st.caption(f"Para não precisar enviar sempre, coloque no repositório: `{ref_c1}` e `{ref_ms}`. "
-                   "Antes de subir a master, apague as colunas de login e senha.")
+                   "Antes de subir a master, apague as colunas de login e senha. "
+                   "A planilha completa (EJA e novatos) usa as versões do repositório.")
         up_c1 = st.file_uploader("Redash do 1º ciclo (ex.: Redash_extra_do_15.10)", type=["xlsx", "csv"], key="ref_c1")
         up_ms = st.file_uploader("Planilha master do 1º ciclo (opcional)", type=["xlsx", "csv"], key="ref_ms")
     fonte_c1 = up_c1 or (ref_c1 if os.path.exists(ref_c1) else None)
@@ -1683,20 +2030,76 @@ elif aba == "🧹 Limpeza do Redash":
     st.caption(f"1º ciclo: {'✅ ' + (getattr(fonte_c1, 'name', fonte_c1)) if fonte_c1 else '❌ falta enviar'} · "
                f"Master: {'✅ ' + (getattr(fonte_ms, 'name', fonte_ms)) if fonte_ms else '— (opcional)'}")
 
-    up_dia = st.file_uploader("Redash do dia (.xlsx)", type=["xlsx", "csv"], key=f"up_dia_{st.session_state.get('lr_n', 0)}")
+    n_up = st.session_state.get("lr_n", 0)
+    cu1, cu2 = st.columns(2)
+    up_dia = cu1.file_uploader("1️⃣ Redash do dia (.xlsx) – Plurall", type=["xlsx", "csv"], key=f"up_dia_{n_up}")
+    up_av = cu2.file_uploader("2️⃣ Avalia mais recente (opcional) – relatorio_acompanhamento_rapp_ept_div",
+                              type=["xlsx", "csv"], key=f"up_av_{n_up}")
     if up_dia is not None and fonte_c1 is not None:
         data_padrao = lr.data_do_arquivo(up_dia.name, agora().date())
         data_ref_lr = st.date_input("Data de referência", value=data_padrao, format="DD/MM/YYYY", key="lr_data")
-        try:
-            with st.spinner("Limpando..."):
-                df_dia = lr._ler(up_dia)
-                result, corrigidos, resumo = lr.limpar_redash(df_dia, lr._ler(fonte_c1),
-                                                              lr._ler(fonte_ms) if fonte_ms is not None else None)
-                xlsx = lr.gerar_excel(result, corrigidos, resumo, data_ref_lr)
-        except Exception as ex:
-            st.error(f"Não foi possível limpar a planilha: {ex}")
-            st.stop()
+        chave_lr = (up_dia.name, up_dia.size, getattr(up_av, "name", None), getattr(up_av, "size", None),
+                    str(data_ref_lr), getattr(fonte_c1, "name", fonte_c1), getattr(fonte_ms, "name", fonte_ms), len(df_comp))
+        if st.session_state.get("_lr_chave") != chave_lr:
+            try:
+                with st.spinner("Limpando o Redash e montando a planilha completa (leva alguns segundos)..."):
+                    df_dia = lr._ler(up_dia)
+                    result, corrigidos, resumo = lr.limpar_redash(df_dia, lr._ler(fonte_c1),
+                                                                  lr._ler(fonte_ms) if fonte_ms is not None else None)
+                    xlsx = lr.gerar_excel(result, corrigidos, resumo, data_ref_lr)
+                    df_av = None
+                    if up_av is not None:
+                        df_av = lr._ler(up_av)
+                        if identificar_planilha(df_av) != "Avalia":
+                            st.warning("O 2º arquivo não parece ser do Avalia (faltam as colunas MATRÍCULA SISTEMA e "
+                                       "SITUAÇÃO DA AVALIAÇÃO). Ele foi ignorado.")
+                            df_av = None
+                    pc = montar_planilha_completa(result, df_av, data_ref_lr, df_comp)
+                    xlsx_pc = planilha_completa_excel(pc)
+                st.session_state["_lr_chave"] = chave_lr
+                st.session_state["_lr_res"] = (result, corrigidos, resumo, xlsx, df_av, pc, xlsx_pc)
+            except Exception as ex:
+                st.session_state.pop("_lr_chave", None)
+                st.error(f"Não foi possível limpar a planilha: {ex}")
+                st.stop()
+        result, corrigidos, resumo, xlsx, df_av, pc, xlsx_pc = st.session_state["_lr_res"]
 
+        # ---------- 1. Planilha completa ----------
+        st.markdown("### 📋 Planilha completa (todos os estudantes)")
+        st.caption("Base do fim do 1º ciclo (planilha tratada + master) + Redash do dia limpo"
+                   + (" + Avalia enviado." if df_av is not None else ". Sem Avalia novo: fica a situação que já estava na base.")
+                   + " Inclui quem não aparece no Redash do dia (não avaliados e aprovados do 1º ciclo). "
+                     "Não altera o painel.")
+        est_pc = pc["estudantes"]
+        vc_pc = est_pc["Situação do aluno"].value_counts()
+        k = st.columns(6)
+        k[0].metric("Estudantes", f"{len(est_pc):,}".replace(",", "."))
+        k[1].metric("Aprovados", int(vc_pc.get(AP, 0)))
+        k[2].metric("Não aprovados", int(vc_pc.get(NAP, 0)))
+        k[3].metric("Não avaliados", int(vc_pc.get(NAV, 0)))
+        k[4].metric("🟦 EJA", int((est_pc["EJA"] != "").sum()))
+        k[5].metric("🟨 Novatos", int((est_pc["Novato"] != "").sum()),
+                    help=f"{int(est_pc['Novato'].str.startswith('Novo hoje').sum())} aparecem pela 1ª vez hoje (laranja)")
+        st.markdown(f"<span style='background:#{COR_NOVO_HOJE};padding:2px 8px;border-radius:4px'>Novo hoje</span> "
+                    f"<span style='background:#{COR_NOVATO};padding:2px 8px;border-radius:4px'>Novato</span> "
+                    f"<span style='background:#{COR_EJA};padding:2px 8px;border-radius:4px'>EJA</span>",
+                    unsafe_allow_html=True)
+        st.download_button("⬇️ Baixar planilha completa", xlsx_pc, type="primary",
+                           file_name=f"RAPP_completa_{data_ref_lr:%d.%m}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        n_sem = pc["sem_matricula"].drop_duplicates(["Nome", "Escola"]).shape[0] if len(pc["sem_matricula"]) else 0
+        if n_sem:
+            st.warning(f"{n_sem} estudante(s) do Redash sem matrícula no e-mail ficaram fora (aba 'Sem matrícula'). "
+                       "Peça a matrícula às escolas.")
+        with st.expander("Ver novatos e EJA"):
+            t1, t2 = st.tabs(["Novatos", "EJA"])
+            cols_v = ["Escola", "Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Situação do aluno", "Notas por componente"]
+            t1.dataframe(estilo_linhas(est_pc.loc[est_pc["Novato"] != "", cols_v]), hide_index=True, use_container_width=True)
+            t2.dataframe(estilo_linhas(est_pc.loc[est_pc["EJA"] != "", cols_v]), hide_index=True, use_container_width=True)
+
+        # ---------- 2. Só o Redash limpo ----------
+        st.markdown("---")
+        st.markdown("### 🧽 Redash do dia limpo (só as linhas do Redash)")
         q = dict(zip(resumo["Indicador"], resumo["Quantidade"]))
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Aprovado", q["Aprovado (total)"],
@@ -1704,29 +2107,95 @@ elif aba == "🧹 Limpeza do Redash":
         k2.metric("Não aprovado", q["Não aprovado (fez a prova e não atingiu 60%, ou reprovado no 1º ciclo sem prova no 2º)"])
         k3.metric("Não avaliado", q["Não avaliado (0%, sem tempo e sem data de entrega)"])
         k4.metric("Corrigidas p/ Aprovado (1º ciclo)", q["  corrigidas para Aprovado (aprovação do 1º ciclo prevalece)"])
+        st.caption("Contagens por linha (aluno x prova) do Redash.")
         if q["Linhas para conferir (tempo/data incompletos)"]:
             st.warning(f"{q['Linhas para conferir (tempo/data incompletos)']} linha(s) com tempo de prova ou data de entrega incompletos "
                        "(coluna 'Conferir?' na planilha).")
-        st.download_button("⬇️ Baixar planilha limpa", xlsx, file_name=f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+        st.download_button("⬇️ Baixar Redash limpo", xlsx, file_name=f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         with st.expander(f"Ver os {len(corrigidos)} componentes corrigidos"):
             st.dataframe(corrigidos, hide_index=True, use_container_width=True)
 
+        # ---------- 3. Atualizar o painel ----------
         st.markdown("---")
-        st.markdown("**Atualizar o painel com esta planilha limpa** (equivale a importá-la na aba 📁 Atualizar Base de Dados).")
+        st.markdown("**Atualizar o painel** com o Redash limpo" + (" e o Avalia" if df_av is not None else "")
+                    + " (equivale a importar na aba 📁 Atualizar Base de Dados).")
         if st.button("🔄 Atualizar painel agora"):
             with st.spinner("Atualizando o painel..."):
                 try:
-                    rel = processar_importacao([(f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx", "Plurall", result)],
-                                               data_ref_lr, df_comp, df_cons, MAPA_ART)
+                    arqs = [(f"Redash_{data_ref_lr:%d.%m}_limpo.xlsx", "Plurall", result)]
+                    if df_av is not None:
+                        arqs.append((getattr(up_av, "name", "Avalia.xlsx"), "Avalia", df_av))
+                    rel = processar_importacao(arqs, data_ref_lr, df_comp, df_cons, MAPA_ART)
                     st.session_state["ultimo_relatorio"] = rel
-                    st.session_state["lr_n"] = st.session_state.get("lr_n", 0) + 1
+                    st.session_state["lr_n"] = n_up + 1
+                    st.session_state.pop("_lr_chave", None)
                     st.session_state["_ir_para_aba"] = "📁 Atualizar Base de Dados"
                     st.rerun()
                 except Exception as ex:
                     st.error(f"Erro ao atualizar o painel: {ex}")
     elif up_dia is not None:
         st.warning("Envie primeiro o Redash do 1º ciclo (em 📚 Planilhas de referência).")
+
+# ==========================================
+# ABA: EXTRAIR POR ESCOLA
+# ==========================================
+elif aba == ABA_ESCOLA:
+    st.title("🏫 Dados de uma escola")
+    st.markdown("Situação e nota de cada estudante da escola, com a **base atual do painel**. "
+                f"<span style='background:#{COR_NOVATO};padding:1px 6px;border-radius:4px'>Novato</span> "
+                f"<span style='background:#{COR_EJA};padding:1px 6px;border-radius:4px'>EJA</span>",
+                unsafe_allow_html=True)
+    escolas_x = sorted(df_comp["Escola"].unique())
+    idx_x = escolas_x.index(filtro_escola) if filtro_escola in escolas_x else 0
+    escola_x = st.selectbox("Escola", escolas_x, index=idx_x, key="sel_escola_extrair")
+    est_x, comp_x = montar_tabelas(df_comp[df_comp["Escola"] == escola_x])
+    if est_x.empty:
+        st.info("Nenhum estudante nesta escola.")
+        st.stop()
+
+    vc_x = est_x["Situação do aluno"].value_counts()
+    m_ = st.columns(6)
+    m_[0].metric("Estudantes", len(est_x))
+    m_[1].metric("Aprovados", int(vc_x.get(AP, 0)))
+    m_[2].metric("Não aprovados", int(vc_x.get(NAP, 0)))
+    m_[3].metric("Não avaliados", int(vc_x.get(NAV, 0)))
+    m_[4].metric("🟦 EJA", int((est_x["EJA"] != "").sum()))
+    m_[5].metric("🟨 Novatos", int((est_x["Novato"] != "").sum()))
+
+    f1, f2, f3 = st.columns([2, 2, 2])
+    sits_x = f1.multiselect("Situação do estudante", ORDEM_SIT, default=ORDEM_SIT, key="x_sits")
+    marcas_x = f2.multiselect("Mostrar só", ["EJA", "Novatos"], key="x_marcas")
+    busca_x = f3.text_input("Buscar estudante (nome ou matrícula)", key="x_busca")
+    filt = est_x["Situação do aluno"].isin(sits_x)
+    if "EJA" in marcas_x:
+        filt &= est_x["EJA"] != ""
+    if "Novatos" in marcas_x:
+        filt &= est_x["Novato"] != ""
+    if busca_x:
+        b_ = norm_txt(busca_x)
+        filt &= est_x["Nome"].map(norm_txt).str.contains(b_, na=False) | est_x["Matrícula"].str.contains(b_, na=False)
+    est_xf = est_x[filt]
+    comp_xf = comp_x[comp_x["Matrícula"].isin(set(est_xf["Matrícula"]))]
+
+    st.info(f"Exibindo {len(est_xf)} de {len(est_x)} estudantes.")
+    ta, tb = st.tabs(["👤 Por estudante", "📚 Por componente (nota e situação)"])
+    ta.dataframe(estilo_linhas(est_xf[["Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Situação do aluno",
+                                       "Situação Plurall", "Situação Avalia", "Notas por componente", "Pendências"]]),
+                 hide_index=True, use_container_width=True)
+    tb.dataframe(estilo_linhas(comp_xf[["Matrícula", "Nome", "Série", "EJA", "Novato", "Plataforma", "Componente",
+                                        "Nota", "Situação", "Status plataforma", "Prova", "Atualizado em"]]),
+                 hide_index=True, use_container_width=True)
+
+    ult_x = fmt_data_br(df_imports.sort_values("Data_Importacao").iloc[-1]["Data_Referencia"]) if len(df_imports) else ""
+    xlsx_x = excel_rapp({
+        "Resumo": resumo_geral(est_xf, escola_x, extras=[["Base do painel atualizada em", ult_x or "—"]]),
+        "Estudantes": est_xf,
+        "Componentes": comp_xf,
+    })
+    st.download_button("⬇️ Baixar planilha da escola (Excel)", xlsx_x, type="primary",
+                       file_name=f"RAPP_{key_escola(escola_x)[:40].replace(' ', '_')}_{agora():%d.%m}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ==========================================
 # ABA 7: RELATÓRIO EXECUTIVO / WHATSAPP
