@@ -77,6 +77,27 @@ CORES_SIT = {AP: "#10b981", NAP: "#f43f5e", NAV: "#f59e0b"}
 COMP_COLS = ["Professor tutor", "Escola", "Matrícula", "Nome", "Série", "Componente",
              "Rendimento", "Situação", "Status plataforma", "Plataforma", "Prova", "Atualizado em", "Origem"]
 ORIGEM_BASE_OFICIAL = "Base oficial"
+# Filtro da DIREC: "01ª DIREC - NATAL". Não pode casar com 11ª, 21ª... (o filtro antigo "1ª DIREC" casava com "11ª DIREC")
+FILTRO_1A_DIREC = r"(?<!\d)0?1\s*[ªº°]?\s*DIREC"
+# Estudantes da 11ª DIREC (Assu) que entraram por engano na importação do Redash de 16/11/2026
+# (filtro antigo). São retirados da base automaticamente ao carregar o painel.
+MATRICULAS_OUTRA_DIREC = frozenset({
+    "201330711282", "201332330472", "201430266179", "201431186591", "201530506877", "201631507540",
+    "201730504949", "201730617049", "201730621201", "201830118480", "201830544571", "201830545238",
+    "201930449987", "201930451386", "201930593695", "202030428311", "202030450232", "202030547161",
+    "202130229704", "202130395456", "202230108416", "202230116928", "202230262461", "202230497379",
+    "202230552050", "202230659163", "202330016676", "202330097576", "202330285530", "202330394033",
+    "202330402037", "202330520522", "202330576297", "202430008069", "202430019788", "202430028929",
+    "202430038602", "202430038792", "202430044379", "202430092750", "202430159214", "202430164582",
+    "202430179594", "202430187863", "202430189868", "202430201701", "202430215206", "202430227691",
+    "202430229337", "202430266457", "202430267857", "202430273308", "202430324917", "202430339992",
+    "202430340358", "202430341785", "202430375442", "202430395570", "202430400705", "202430405247",
+    "202430424725", "202430428671", "202430453333", "202430497454", "202430523797", "202430556143",
+    "202530012064", "202530028037", "202530034778", "202530048380", "202530053049", "202530069817",
+    "202530071628", "202530126557", "202530137917", "202530146504", "202530173673", "202530174250",
+    "202530313353", "202530354267", "202530355086", "202530376827", "202530395475", "202630073287",
+    "202630254086", "202630381955"
+})
 
 # Abas (worksheets) usadas na planilha do Google Drive
 WS_VISITAS = "Visitas"
@@ -555,6 +576,11 @@ def obter_dados():
         persistida = ler_base_persistida()
         if persistida is not None and len(persistida) > 0:
             comp = padronizar_comp(persistida)
+            # remove estudantes de outra DIREC incluídos por engano (Redash de 16/11 com o filtro antigo)
+            fora_direc = comp["Matrícula"].map(key_mat).isin(MATRICULAS_OUTRA_DIREC) & \
+                comp["Origem"].astype(str).str.startswith("Incluído")
+            if fora_direc.any():
+                comp = comp[~fora_direc].reset_index(drop=True)
             origem = "Base atualizada (salva no armazenamento)"
         else:
             comp = comp_ini
@@ -601,7 +627,7 @@ def preparar_plurall(raw, comp):
     df = raw.copy()
     c_grupo = _col(df, "Grupo")
     if c_grupo:
-        df = df[df[c_grupo].astype(str).str.contains(r"01ª DIREC|01 DIREC|1ª DIREC|NATAL", case=False, na=False)]
+        df = df[df[c_grupo].astype(str).str.contains(FILTRO_1A_DIREC, case=False, na=False)]
     c_email, c_aluno, c_escola = _col(df, "email_aluno"), _col(df, "aluno"), _col(df, "escola")
     c_prova, c_nome_prova = _col(df, "prova"), _col(df, "name")
     c_rend, c_sit = _col(df, "rendimento (%)", "rendimento"), _col(df, "Situação")
@@ -650,7 +676,7 @@ def preparar_avalia(raw):
     df = raw.copy()
     c_direc = _col(df, "DIREC")
     if c_direc:
-        df = df[df[c_direc].astype(str).str.contains(r"01ª DIREC|01 DIREC|1ª DIREC|NATAL", case=False, na=False)]
+        df = df[df[c_direc].astype(str).str.contains(FILTRO_1A_DIREC, case=False, na=False)]
     c_mat, c_comp = _col(df, "MATRÍCULA SISTEMA"), _col(df, "COMPONENTE CURRICULAR")
     c_sit, c_nota = _col(df, "SITUAÇÃO DA AVALIAÇÃO"), _col(df, "NOTA FINAL")
     c_nome, c_esc = _col(df, "NOME DO ESTUDANTE"), _col(df, "ESCOLA")

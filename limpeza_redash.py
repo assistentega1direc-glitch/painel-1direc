@@ -90,7 +90,7 @@ def data_do_arquivo(nome, padrao=None):
 
 
 # ------------------------------------------------------------------ limpeza
-def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"01ª DIREC|1ª DIREC|01 DIREC|NATAL"):
+def limpar_redash(df_novo, df_ciclo1, df_master=None, filtro_grupo=r"(?<!\d)0?1\s*[ªº°]?\s*DIREC"):
     """Retorna (result, corrigidos, resumo)."""
     novo = df_novo.copy()
     c1 = df_ciclo1.copy()
