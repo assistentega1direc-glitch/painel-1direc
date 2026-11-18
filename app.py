@@ -77,6 +77,7 @@ CORES_SIT = {AP: "#10b981", NAP: "#f43f5e", NAV: "#f59e0b"}
 COMP_COLS = ["Professor tutor", "Escola", "Matrícula", "Nome", "Série", "Componente",
              "Rendimento", "Situação", "Status plataforma", "Plataforma", "Prova", "Atualizado em", "Origem"]
 ORIGEM_BASE_OFICIAL = "Base oficial"
+STATUS_AP_1C = "Aprovado no 1º ciclo"
 # Filtro da DIREC: "01ª DIREC - NATAL". Não pode casar com 11ª, 21ª... (o filtro antigo "1ª DIREC" casava com "11ª DIREC")
 FILTRO_1A_DIREC = r"(?<!\d)0?1\s*[ªº°]?\s*DIREC"
 # Estudantes da 11ª DIREC (Assu) que entraram por engano na importação do Redash de 16/11/2026
@@ -567,6 +568,25 @@ def consolidar_alunos(cons):
     return df
 
 
+def restaurar_notas_1o_ciclo(comp, comp_ini):
+    """Linhas do Plurall 'Aprovado' que vieram do Redash do 2º ciclo com nota abaixo de 60% são aprovações
+    do 1º ciclo mantidas (o Redash traz 0%). Devolve a nota do 1º ciclo, da planilha tratada."""
+    rend = pd.to_numeric(comp["Rendimento"].astype(str).str.replace(",", "."), errors="coerce")
+    alvo = (comp["Plataforma"] == "Plurall") & (comp["Situação"] == AP) & \
+           comp["Prova"].astype(str).str.contains("2º", na=False) & (rend.isna() | (rend < 60))
+    if not alvo.any():
+        return comp
+    comp = comp.copy()
+    ini = comp_ini[(comp_ini["Plataforma"] == "Plurall") & (comp_ini["Situação"] == AP)].copy()
+    ini["_k"] = ini["Matrícula"].map(key_mat) + "|" + ini["Componente"].map(key_comp)
+    nota_ini = ini.drop_duplicates("_k").set_index("_k")["Rendimento"]
+    chave = comp.loc[alvo, "Matrícula"].map(key_mat) + "|" + comp.loc[alvo, "Componente"].map(key_comp)
+    comp.loc[alvo, "Rendimento"] = chave.map(nota_ini).fillna("—").values
+    comp.loc[alvo, "Status plataforma"] = STATUS_AP_1C
+    comp.loc[alvo, "Prova"] = "Aprovação do 1º ciclo (mantida)"
+    return comp
+
+
 @st.cache_data(ttl=300, show_spinner="Atualizando painel...")
 def obter_dados():
     caminho = EXCEL_DEFAULT
@@ -581,6 +601,7 @@ def obter_dados():
                 comp["Origem"].astype(str).str.startswith("Incluído")
             if fora_direc.any():
                 comp = comp[~fora_direc].reset_index(drop=True)
+            comp = restaurar_notas_1o_ciclo(comp, comp_ini)
             origem = "Base atualizada (salva no armazenamento)"
         else:
             comp = comp_ini
@@ -665,6 +686,19 @@ def preparar_plurall(raw, comp):
     })
     out["Situação"] = out["Status plataforma"].map(norm_situacao)
     out["Rendimento"] = out["_rend"].map(lambda v: "—" if pd.isna(v) else f"{v:g}")
+    # Planilha limpa: quando a aprovação do 1º ciclo prevalece, o Redash do 2º ciclo traz 0%.
+    # Usa a nota do 1º ciclo (que vem na coluna "Motivo da situação") e marca a linha.
+    c_motivo = _col(df, "Motivo da situação")
+    if c_motivo:
+        motivo = df[c_motivo].astype(str)
+        prevalece = motivo.str.contains("1º ciclo", na=False) & motivo.str.contains("prevalece", na=False) \
+            & (out["Situação"] == AP).values
+        nota_1c = motivo.str.extract(r"1º ciclo \((\d+(?:[.,]\d+)?)%\)")[0].str.replace(",", ".")
+        idx = prevalece[prevalece].index
+        out.loc[idx, "_rend"] = pd.to_numeric(nota_1c[idx], errors="coerce")
+        out.loc[idx, "Rendimento"] = nota_1c[idx].fillna("—")
+        out.loc[idx, "Status plataforma"] = STATUS_AP_1C
+        out.loc[idx, "Prova"] = "Aprovação do 1º ciclo (mantida)"
     out["_rank"] = out["Situação"].map({AP: 2, NAP: 1, NAV: 0})
     # Mesma prova repetida (refação): fica o melhor resultado
     out = (out.sort_values(["_rank", "_rend"], ascending=False)
@@ -1008,8 +1042,10 @@ def turmas_do_redash(df_redash):
     return d.groupby("_mk").agg(Turma=("Turma", _juntar), **{"Turno turma": ("Turno turma", _juntar)})
 
 
-def _fmt_nota(nota, plataforma, situacao=None):
+def _fmt_nota(nota, plataforma, situacao=None, status=""):
     s = str(nota).strip()
+    if status == STATUS_AP_1C:
+        return f"{s}% (1º ciclo)" if s not in ("", "—", "-", "nan", "None") else "aprovado no 1º ciclo"
     if s in ("", "—", "-", "nan", "None") or (situacao == NAV and s in ("0", "0.0")):
         return "sem nota"
     return f"{s}%" if plataforma == "Plurall" else s
@@ -1036,7 +1072,8 @@ def montar_tabelas(comp, data_ref_iso=None, turmas=None, comp_painel=None):
             entrada.setdefault(mk, m_.group(1) if m_ else "")
     oficiais = set(c.loc[c["Origem"] == ORIGEM_BASE_OFICIAL, "_mk"])
 
-    c["Nota"] = [_fmt_nota(n, p, st_) for n, p, st_ in zip(c["Rendimento"], c["Plataforma"], c["Situação"])]
+    c["Nota"] = [_fmt_nota(n, p, st_, sp) for n, p, st_, sp in
+                 zip(c["Rendimento"], c["Plataforma"], c["Situação"], c["Status plataforma"])]
     c["_nota_txt"] = c["Componente"] + " (" + c["Plataforma"] + "): " + c["Nota"] + " – " + c["Situação"]
     c["_pend_txt"] = (c["Componente"] + " (" + c["Situação"] + ")").where(c["Situação"] != AP)
 
