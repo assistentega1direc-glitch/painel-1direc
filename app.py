@@ -978,14 +978,13 @@ def _mtime(caminho):
     return os.path.getmtime(caminho) if os.path.exists(caminho) else 0
 
 
-@st.cache_data(show_spinner=False)
-def carregar_referencias(mt_master, mt_c1):
+def refs_de(m=None, r=None):
     """Cadastro da planilha master (série, turno...) e chaves de quem já existia no 1º ciclo
-    (master + Redash do 1º ciclo). Usado para marcar EJA e novatos."""
+    (master + Redash do 1º ciclo). Usado para turno, série, EJA e novatos."""
     cad = pd.DataFrame(columns=["Escola", "Nome", "Professor tutor", "Plataforma", "Série master", "Turno master"])
     mks, nomes = set(), set()
-    if mt_master:
-        m = pd.read_excel(REF_MASTER, dtype=str)
+    if m is not None and len(m):
+        m = m.copy().astype(str).replace({"nan": None})
         c_mat, c_nome, c_esc = _col(m, "Matrícula"), _col(m, "Nome"), _col(m, "Escola")
         c_serie, c_turno = _col(m, "Série"), _col(m, "TURNO", "Turno")
         c_tutor, c_plat = _col(m, "Professor tutor"), _col(m, "Plataforma")
@@ -1003,8 +1002,7 @@ def carregar_referencias(mt_master, mt_c1):
         cad = m.groupby("_mk").agg(**agg)
         mks |= set(m["_mk"])
         nomes |= set(m[c_nome].map(norm_txt))
-    if mt_c1:
-        r = pd.read_excel(REF_C1)
+    if r is not None and len(r):
         ce, ca = _col(r, "email_aluno"), _col(r, "aluno")
         if ce:
             loc = r[ce].astype(str).str.strip().str.split("@").str[0]
@@ -1014,7 +1012,18 @@ def carregar_referencias(mt_master, mt_c1):
     return cad, mks, nomes
 
 
+@st.cache_data(show_spinner=False)
+def carregar_referencias(mt_master, mt_c1):
+    m = pd.read_excel(REF_MASTER, dtype=str) if mt_master else None
+    r = pd.read_excel(REF_C1) if mt_c1 else None
+    return refs_de(m, r)
+
+
 def referencias_1o_ciclo():
+    """Usa as planilhas enviadas na aba de limpeza (se houver nesta sessão); senão, as do repositório."""
+    enviadas = st.session_state.get("_refs_enviadas")
+    if enviadas is not None:
+        return enviadas
     return carregar_referencias(_mtime(REF_MASTER), _mtime(REF_C1))
 
 
@@ -2085,13 +2094,16 @@ elif aba == "🧹 Limpeza do Redash":
     with st.expander("📚 Planilhas de referência do 1º ciclo", expanded=not os.path.exists(ref_c1)):
         st.caption(f"Para não precisar enviar sempre, coloque no repositório: `{ref_c1}` e `{ref_ms}`. "
                    "Antes de subir a master, apague as colunas de login e senha. "
-                   "A planilha completa (EJA e novatos) usa as versões do repositório.")
+                   "O turno e a série dos estudantes que não estão no Redash do dia vêm da master.")
         up_c1 = st.file_uploader("Redash do 1º ciclo (ex.: Redash_extra_do_15.10)", type=["xlsx", "csv"], key="ref_c1")
         up_ms = st.file_uploader("Planilha master do 1º ciclo (opcional)", type=["xlsx", "csv"], key="ref_ms")
     fonte_c1 = up_c1 or (ref_c1 if os.path.exists(ref_c1) else None)
     fonte_ms = up_ms or (ref_ms if os.path.exists(ref_ms) else None)
     st.caption(f"1º ciclo: {'✅ ' + (getattr(fonte_c1, 'name', fonte_c1)) if fonte_c1 else '❌ falta enviar'} · "
-               f"Master: {'✅ ' + (getattr(fonte_ms, 'name', fonte_ms)) if fonte_ms else '— (opcional)'}")
+               f"Master: {'✅ ' + (getattr(fonte_ms, 'name', fonte_ms)) if fonte_ms else '❌ sem master'}")
+    if fonte_ms is None:
+        st.warning("Sem a planilha master, o turno e a série só aparecem para quem está no Redash do dia. "
+                   f"Envie a master acima ou coloque-a no repositório em `{ref_ms}`.")
 
     n_up = st.session_state.get("lr_n", 0)
     cu1, cu2 = st.columns(2)
@@ -2107,8 +2119,12 @@ elif aba == "🧹 Limpeza do Redash":
             try:
                 with st.spinner("Limpando o Redash e montando a planilha completa (leva alguns segundos)..."):
                     df_dia = lr._ler(up_dia)
-                    result, corrigidos, resumo = lr.limpar_redash(df_dia, lr._ler(fonte_c1),
-                                                                  lr._ler(fonte_ms) if fonte_ms is not None else None)
+                    df_c1_ref = lr._ler(fonte_c1)
+                    df_ms_ref = lr._ler(fonte_ms) if fonte_ms is not None else None
+                    if up_c1 is not None or up_ms is not None:  # planilhas enviadas agora valem para toda a sessão
+                        st.session_state["_refs_enviadas"] = refs_de(
+                            df_ms_ref.astype(str) if df_ms_ref is not None else None, df_c1_ref)
+                    result, corrigidos, resumo = lr.limpar_redash(df_dia, df_c1_ref, df_ms_ref)
                     xlsx = lr.gerar_excel(result, corrigidos, resumo, data_ref_lr)
                     df_av = None
                     if up_av is not None:
@@ -2212,6 +2228,9 @@ elif aba == ABA_ESCOLA:
     escolas_x = sorted(df_comp["Escola"].unique())
     idx_x = escolas_x.index(filtro_escola) if filtro_escola in escolas_x else 0
     escola_x = st.selectbox("Escola", escolas_x, index=idx_x, key="sel_escola_extrair")
+    if referencias_1o_ciclo()[0].empty:
+        st.warning("A planilha master não está no repositório (`referencias/Planilha_master_1o_ciclo.xlsx`): "
+                   "turno e parte das séries ficam em branco. Suba a master no GitHub ou envie-a na aba 🧹 Limpeza do Redash.")
     est_x, comp_x = montar_tabelas(df_comp[df_comp["Escola"] == escola_x])
     if est_x.empty:
         st.info("Nenhum estudante nesta escola.")
