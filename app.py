@@ -1060,6 +1060,194 @@ def _fmt_nota(nota, plataforma, situacao=None, status=""):
     return f"{s}%" if plataforma == "Plurall" else s
 
 
+# ============================================================
+# BUSCA ATIVA (formulário das escolas) e BASE EJA (série do componente em RAPP)
+# ============================================================
+WS_BUSCA = "Busca_Ativa"
+COLS_BUSCA = ["Escola", "Nome", "Matrícula", "Situação busca ativa", "Relato da escola", "Comprovante",
+              "Data da resposta", "Atualizado em"]
+WS_EJA = "Base_EJA"
+COLS_EJA = ["Matrícula", "Nome", "Escola", "Série atual", "Componente", "Série do componente em RAPP",
+            "Classificação EJA", "Observação", "Atualizado em"]
+EJA_NAO_RAPP = "Pendência na modalidade EJA (não faz RAPP)"
+EJA_REGULAR = "Pendência no ensino regular (faz RAPP)"
+EJA_MISTA = "Regular e EJA (faz RAPP pela parte regular – conferir)"
+EJA_SEM = "Sem pendência a cobrar (pagou, 2027 ou não consta)"
+BUSCA_GRAVE = ("EVADIDO", "TRANSFERIDO", "DEIXOU DE FREQUENTAR")
+COR_BUSCA, COR_BUSCA_GRAVE, COR_NAO_RAPP = "FCE7F3", "FECACA", "E5E7EB"   # rosa, vermelho claro, cinza
+
+
+def classificar_serie_rapp(serie):
+    """Classifica a 'série do componente em RAPP' da base EJA. Só quem deve o componente no ensino regular
+    faz a prova do RAPP; pendência na modalidade EJA (períodos) é resolvida no próprio EJA."""
+    k = norm_txt(serie)
+    if not k:
+        return ""
+    if re.search(r"PAGOU|NAO CONSTA|2027|NAO GERA", k):
+        return EJA_SEM
+    partes = [norm_txt(p) for p in re.split(r"&|/|\s+e\s+(?=ENSINO|EJA|CURSO)", str(serie), flags=re.I) if norm_txt(p)]
+    eja = [p for p in partes if re.search(r"PERIODO|\bEJA\b", p)]
+    if eja and len(eja) == len(partes):
+        return EJA_NAO_RAPP
+    return EJA_MISTA if eja else EJA_REGULAR
+
+
+def ler_busca_ativa(df):
+    """Respostas do formulário (1 linha por escola, 1 coluna por estudante) -> 1 linha por estudante."""
+    cols = list(df.columns)
+    c_data = next((c for c in cols if "CARIMBO" in norm_txt(c) or norm_txt(c).startswith("DATA")), None)
+    c_esc = next((c for c in cols if "ESCOLA" in norm_txt(c)), None)
+    if c_esc is None or not any("[" in str(c) for c in cols):
+        raise ValueError("não parece a planilha de respostas do formulário de busca ativa "
+                         "(falta a coluna da escola ou as colunas '... [NOME DO ESTUDANTE]').")
+    linhas = []
+    for _, r in df.iterrows():
+        secao = []
+        for c in cols:
+            nc, v = norm_txt(c), r[c]
+            m_ = re.search(r"\[(.+?)\]", str(c))
+            if m_ and "SITUACAO" in nc:
+                if pd.notna(v) and str(v).strip():
+                    secao.append({"Escola": " ".join(str(r[c_esc]).split()), "Nome": " ".join(m_.group(1).split()).upper(),
+                                  "Situação busca ativa": str(v).strip(), "Relato da escola": "", "Comprovante": "",
+                                  "Data da resposta": str(r[c_data])[:16] if c_data else ""})
+            elif nc.startswith("RELATE"):
+                if pd.notna(v) and str(v).strip():
+                    for p in secao:
+                        p["Relato da escola"] = " ".join(str(v).split())
+            elif nc.startswith("ANEXE"):
+                if pd.notna(v) and str(v).strip():
+                    for p in secao:
+                        p["Comprovante"] = str(v).strip()
+                linhas += secao
+                secao = []
+        linhas += secao
+    out = pd.DataFrame(linhas, columns=["Escola", "Nome", "Situação busca ativa", "Relato da escola", "Comprovante",
+                                        "Data da resposta"])
+    # a mesma escola pode responder mais de uma vez: vale a resposta mais recente de cada estudante
+    out["_ke"], out["_kn"] = out["Escola"].map(key_escola), out["Nome"].map(norm_txt)
+    out = out.sort_values("Data da resposta").drop_duplicates(["_ke", "_kn"], keep="last")
+    return out.drop(columns=["_ke", "_kn"]).reset_index(drop=True)
+
+
+def casar_por_nome(df, comp):
+    """Matrícula do painel para cada linha (nome + escola; se não achar, nome único na rede)."""
+    b = comp.drop_duplicates(["Matrícula"]).copy()
+    b["_kn"], b["_ke"] = b["Nome"].map(norm_txt), b["Escola"].map(key_escola)
+    por_ne = b.drop_duplicates(["_kn", "_ke"], keep=False).set_index(["_kn", "_ke"])["Matrícula"]
+    por_n = b.drop_duplicates("_kn", keep=False).set_index("_kn")["Matrícula"]
+    return [por_ne.get((norm_txt(n_), key_escola(e_))) or por_n.get(norm_txt(n_)) or ""
+            for n_, e_ in zip(df["Nome"], df["Escola"])]
+
+
+def ler_base_eja(arquivo):
+    """Planilha '1ª D - Base estudantes de RAPP 2º Ciclo - EJA': usa a aba que tem 'série do componente em RAPP'."""
+    abas = pd.read_excel(arquivo, sheet_name=None, dtype=str)
+    alvo = next((d for d in abas.values() if any("SERIE DO COMPONENTE" in norm_txt(c) for c in d.columns)), None)
+    if alvo is None:
+        raise ValueError("nenhuma aba tem a coluna 'serie do componente em RAPP'.")
+    d = alvo
+    col = lambda *a: _col(d, *a)
+    c_serie = next(c for c in d.columns if "SERIE DO COMPONENTE" in norm_txt(c))
+    out = pd.DataFrame({
+        "Matrícula": d[col("MATRÍCULA", "Matricula")].map(key_mat),
+        "Nome": d[col("NOME")].astype(str).str.strip() if col("NOME") else "",
+        "Escola": d[col("ESCOLA")].astype(str).str.strip() if col("ESCOLA") else "",
+        "Série atual": d[col("SÉRIE ATUAL")].astype(str).str.strip() if col("SÉRIE ATUAL") else "",
+        "Componente": d[col("COMPONENTE")].astype(str).str.strip(),
+        "Série do componente em RAPP": d[c_serie].fillna("").astype(str).str.strip(),
+        "Observação": d[col("Observação")].fillna("").astype(str).str.strip() if col("Observação") else "",
+    })
+    out["Classificação EJA"] = out["Série do componente em RAPP"].map(classificar_serie_rapp)
+    return out[out["Matrícula"] != ""].reset_index(drop=True)
+
+
+def salvar_tabela(nome, colunas, df):
+    """Regrava uma aba inteira (Google Sheets ou CSV local)."""
+    df = df.reindex(columns=colunas).fillna("").astype(str)
+    if gsheets_configurado():
+        ws, _ = _ws(nome, colunas)
+        ws.clear()
+        if ws.row_count < len(df) + 1 or ws.col_count < len(colunas):
+            ws.resize(rows=max(len(df) + 1, ws.row_count), cols=max(len(colunas), ws.col_count))
+        ws.update(values=[colunas] + df.values.tolist(), range_name="A1", value_input_option="RAW")
+    else:
+        df.to_csv(_csv_local(nome), index=False)
+    ler_tabela.clear()
+
+
+def tabelas_marcacao():
+    """(busca ativa, base EJA) salvas no painel; vazias se ainda não foram enviadas."""
+    try:
+        ba = ler_tabela(WS_BUSCA, tuple(COLS_BUSCA)).fillna("")
+        ej = ler_tabela(WS_EJA, tuple(COLS_EJA)).fillna("")
+    except Exception:
+        ba, ej = pd.DataFrame(columns=COLS_BUSCA), pd.DataFrame(columns=COLS_EJA)
+    return ba, ej
+
+
+def marcar_busca_e_eja(est, comp_out):
+    """Acrescenta as colunas de busca ativa e de pendência EJA (estudante e componente)."""
+    ba, ej = tabelas_marcacao()
+    est = est.copy()
+    comp_out = comp_out.copy()
+    mk_est = est["Matrícula"].map(key_mat)
+    # ---- busca ativa: por matrícula (casada ao salvar) ou nome + escola
+    sit_ba, rel_ba = {}, {}
+    if len(ba):
+        for r in ba.to_dict("records"):
+            k = key_mat(r.get("Matrícula", "")) or ("NOME:" + norm_txt(r["Nome"]) + "|" + key_escola(r["Escola"]))
+            sit_ba[k], rel_ba[k] = r["Situação busca ativa"], r.get("Relato da escola", "")
+    k_nome = "NOME:" + est["Nome"].map(norm_txt) + "|" + est["Escola"].map(key_escola)
+    est["Busca ativa"] = [sit_ba.get(a) or sit_ba.get(b) or "" for a, b in zip(mk_est, k_nome)]
+    est["Relato busca ativa"] = [rel_ba.get(a) or rel_ba.get(b) or "" for a, b in zip(mk_est, k_nome)]
+    # ---- base EJA: classificação por matrícula + componente
+    cls = {}
+    if len(ej):
+        grupos = {}
+        for r in ej.to_dict("records"):
+            grupos.setdefault((key_mat(r["Matrícula"]), key_comp(r["Componente"])), set()).add(r["Classificação EJA"])
+        for k, cl in grupos.items():
+            cl.discard("")
+            if cl == {EJA_NAO_RAPP}:
+                cls[k] = EJA_NAO_RAPP
+            elif EJA_NAO_RAPP in cl or EJA_MISTA in cl:   # mesma disciplina devida no EJA e no regular
+                cls[k] = EJA_MISTA if (cl - {EJA_NAO_RAPP, EJA_SEM}) or EJA_MISTA in cl else EJA_NAO_RAPP
+            elif EJA_REGULAR in cl:
+                cls[k] = EJA_REGULAR
+            elif cl:
+                cls[k] = EJA_SEM
+    comp_out["Pendência EJA (série do componente)"] = [
+        cls.get((key_mat(m_), key_comp(c_)), "") if s_ != AP else ""
+        for m_, c_, s_ in zip(comp_out["Matrícula"], comp_out["Componente"], comp_out["Situação"])]
+    comp_out["Faz RAPP?"] = comp_out["Pendência EJA (série do componente)"].map(
+        lambda v: "Não" if v in (EJA_NAO_RAPP, EJA_SEM) else ("Conferir" if v == EJA_MISTA else
+                                                              ("Sim" if v == EJA_REGULAR else "")))
+
+    pend = comp_out[comp_out["Situação"] != AP]
+    resumo_eja = {}
+    for mk, d in pend.groupby(pend["Matrícula"].map(key_mat)):
+        c = d["Pendência EJA (série do componente)"]
+        if not (c != "").any():
+            continue
+        n_eja, n_sem = int((c == EJA_NAO_RAPP).sum()), int((c == EJA_SEM).sum())
+        n_mista, n_reg = int((c == EJA_MISTA).sum()), int((c == EJA_REGULAR).sum())
+        n_fora = n_eja + n_sem          # pendências que NÃO são cobradas no RAPP
+        n_faz = len(d) - n_fora          # regular, mista ou componente sem registro na base EJA
+        if n_faz == 0:
+            resumo_eja[mk] = ("Não faz RAPP: pendência só na modalidade EJA" if n_sem == 0 else
+                              "Não faz RAPP: sem pendência a cobrar" if n_eja == 0 else
+                              "Não faz RAPP: pendência no EJA ou sem pendência a cobrar")
+        elif n_mista:
+            resumo_eja[mk] = "Conferir: o mesmo componente aparece como regular e EJA"
+        elif n_fora:
+            resumo_eja[mk] = f"Faz RAPP em parte: {n_faz} de {len(d)} pendências (as outras são do EJA ou nada a cobrar)"
+        else:
+            resumo_eja[mk] = "Faz RAPP: pendência no ensino regular"
+    est["Pendência EJA"] = mk_est.map(resumo_eja).fillna("")
+    return est, comp_out
+
+
 def montar_tabelas(comp, data_ref_iso=None, turmas=None, comp_painel=None):
     """Monta (estudantes, componentes) com série, turno, EJA e novatos.
     Novato = estudante que não está na base oficial, na planilha master nem no Redash do 1º ciclo.
@@ -1139,6 +1327,10 @@ def montar_tabelas(comp, data_ref_iso=None, turmas=None, comp_painel=None):
     cols_comp = ["Escola", "Professor tutor", "Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Plataforma",
                  "Componente", "Nota", "Situação", "Status plataforma", "Prova", "Atualizado em"]
     comp_out = comp_out.sort_values(["Escola", "Nome", "Plataforma", "Componente"])[cols_comp].reset_index(drop=True)
+    # busca ativa (formulário das escolas) e base EJA (só deve RAPP quem tem pendência no ensino regular)
+    est, comp_out = marcar_busca_e_eja(est, comp_out)
+    est = est[cols_est[:9] + ["Busca ativa", "Pendência EJA"] + cols_est[9:] + ["Relato busca ativa"]]
+    comp_out = comp_out[cols_comp[:8] + ["Faz RAPP?"] + cols_comp[8:] + ["Pendência EJA (série do componente)"]]
     return est, comp_out
 
 
@@ -1152,11 +1344,14 @@ def resumo_por_escola(est):
            "Não avaliados": ("Situação do aluno", lambda x: int((x == NAV).sum())),
            "EJA": ("EJA", lambda x: int((x != "").sum())),
            "Novatos": ("Novato", lambda x: int((x != "").sum())),
-           "Novos hoje": ("Novato", lambda x: int(x.str.startswith("Novo hoje").sum()))})
+           "Novos hoje": ("Novato", lambda x: int(x.str.startswith("Novo hoje").sum())),
+           "Busca ativa": ("Busca ativa", lambda x: int((x != "").sum())),
+           "EJA sem RAPP": ("Pendência EJA", lambda x: int(x.str.startswith("Não faz RAPP").sum()))})
     r["Pendentes"] = r["Não aprovados"] + r["Não avaliados"]
     r["% aprovados"] = (100 * r["Aprovados"] / r["Estudantes"]).round(1)
     return r.reset_index()[["Escola", "Estudantes", "Aprovados", "Não aprovados", "Não avaliados", "Pendentes",
-                            "% aprovados", "EJA", "Novatos", "Novos hoje"]].sort_values("Pendentes", ascending=False)
+                            "% aprovados", "EJA", "Novatos", "Novos hoje", "Busca ativa", "EJA sem RAPP"]
+                           ].sort_values("Pendentes", ascending=False)
 
 
 def resumo_geral(est, titulo, data_ref_iso=None, extras=None):
@@ -1173,11 +1368,28 @@ def resumo_geral(est, titulo, data_ref_iso=None, extras=None):
         ["Novatos (não estavam no 1º ciclo)", int((est["Novato"] != "").sum()) if len(est) else 0],
         ["  entraram na planilha pela 1ª vez hoje", int(est["Novato"].str.startswith("Novo hoje").sum()) if len(est) else 0],
     ]
+    if len(est) and "Busca ativa" in est:
+        ba_ = est.loc[est["Busca ativa"] != "", "Busca ativa"]
+        linhas.append(["Estudantes com resposta da busca ativa", len(ba_)])
+        for sit, q in ba_.value_counts().items():
+            linhas.append([f"  {sit}", int(q)])
+        nao_rapp = est["Pendência EJA"].str.startswith("Não faz RAPP")
+        linhas += [["Estudantes da base EJA que fazem RAPP (pendência no ensino regular)",
+                    int(est["Pendência EJA"].str.startswith("Faz RAPP").sum())],
+                   ["Estudantes da base EJA que NÃO fazem RAPP (pendência no EJA ou nada a cobrar)", int(nao_rapp.sum())],
+                   ["Estudantes da base EJA para conferir", int(est["Pendência EJA"].str.startswith("Conferir").sum())],
+                   ["Estudantes EJA que fazem RAPP só em parte das pendências",
+                    int(est["Pendência EJA"].str.startswith("Faz RAPP em parte").sum())],
+                   ["Pendentes que fazem RAPP (sem os de pendência só no EJA)",
+                    int(((est["Situação do aluno"] != AP) & ~nao_rapp).sum())]]
     linhas += extras or []
     linhas += [["", ""], ["LEGENDA DAS CORES", ""],
                ["Linha laranja", "Novato que aparece pela primeira vez nesta planilha (novo hoje)"],
                ["Linha amarela", "Novato: não estava na planilha master nem no Redash do 1º ciclo"],
                ["Linha azul / célula EJA azul", "Estudante de EJA (série em períodos, turma II, semestre ou módulo)"],
+               ["Célula 'Busca ativa' vermelha / rosa", "Evadido, transferido ou deixou de frequentar / outra situação"],
+               ["Célula 'Pendência EJA' / 'Faz RAPP?'", "Verde = faz RAPP (pendência no ensino regular); cinza = não faz "
+                "(pendência na modalidade EJA – período – ou sem pendência a cobrar); amarelo = conferir"],
                ["Situação do aluno", "Aprovado = sem pendência; Não aprovado = reprovou em algum componente; "
                                      "Não avaliado = tem prova não realizada (e nenhuma reprovação)"]]
     return pd.DataFrame(linhas, columns=["Indicador", "Valor"])
@@ -1208,8 +1420,11 @@ def excel_rapp(abas):
             cols = list(df.columns)
             i_sit = [cols.index(c) + 1 for c in cols if str(c).startswith("Situação")]
             i_eja = cols.index("EJA") + 1 if "EJA" in cols else None
+            i_ba = [cols.index(c) + 1 for c in cols if c == "Busca ativa"]
+            i_rapp = [cols.index(c) + 1 for c in cols if c in ("Pendência EJA", "Faz RAPP?", "Pendência EJA (série do componente)")]
+            fill_b, fill_bg, fill_nr = (PatternFill("solid", fgColor=c) for c in (COR_BUSCA, COR_BUSCA_GRAVE, COR_NAO_RAPP))
             tem_flags = "Novato" in cols and "EJA" in cols
-            if not (tem_flags or i_sit):
+            if not (tem_flags or i_sit or i_ba or i_rapp):
                 continue
             nov = df["Novato"].astype(str).tolist() if tem_flags else [""] * len(df)
             eja = df["EJA"].astype(str).tolist() if tem_flags else [""] * len(df)
@@ -1227,6 +1442,18 @@ def excel_rapp(abas):
                     f_ = fontes.get(linha[j - 1].value)
                     if f_ is not None:
                         linha[j - 1].font = f_
+                for j in i_ba:
+                    v_ = str(linha[j - 1].value or "")
+                    if v_:
+                        linha[j - 1].fill = fill_bg if any(g in norm_txt(v_) for g in BUSCA_GRAVE) else fill_b
+                for j in i_rapp:
+                    v_ = str(linha[j - 1].value or "")
+                    if v_.startswith("Não") or v_ in (EJA_NAO_RAPP, EJA_SEM):
+                        linha[j - 1].fill = fill_nr
+                    elif v_.startswith("Conferir") or v_ == EJA_MISTA:
+                        linha[j - 1].fill = PatternFill("solid", fgColor="FDE68A")
+                    elif v_.startswith("Sim") or v_.startswith("Faz RAPP") or v_ == EJA_REGULAR:
+                        linha[j - 1].fill = PatternFill("solid", fgColor="BBF7D0")
     return buf.getvalue()
 
 
@@ -1293,6 +1520,8 @@ def planilha_completa_excel(pc):
         "Por escola": pc["por_escola"],
         "Novatos": est[est["Novato"] != ""],
         "EJA": est[est["EJA"] != ""],
+        "Busca ativa": est[est["Busca ativa"] != ""],
+        "EJA - faz RAPP": est[est["Pendência EJA"] != ""],
         "Sem matrícula": pc["sem_matricula"],
     })
 
@@ -2105,6 +2334,44 @@ elif aba == "🧹 Limpeza do Redash":
         st.warning("Sem a planilha master, o turno e a série só aparecem para quem está no Redash do dia. "
                    f"Envie a master acima ou coloque-a no repositório em `{ref_ms}`.")
 
+    ba_salva, eja_salva = tabelas_marcacao()
+    with st.expander(f"📋 Busca ativa e base EJA · salvas no painel: {len(ba_salva)} respostas de busca ativa, "
+                     f"{len(eja_salva)} componentes da base EJA"):
+        st.caption("Envie a versão mais recente sempre que as planilhas forem atualizadas: o painel substitui a "
+                   "anterior e passa a marcar esses estudantes na planilha completa e na aba 🏫 Dados de uma Escola.")
+        cb1, cb2 = st.columns(2)
+        up_ba = cb1.file_uploader("Busca ativa – respostas do formulário (.xlsx)", type=["xlsx", "csv"], key=f"up_ba_{st.session_state.get('ba_n', 0)}")
+        up_ej = cb2.file_uploader("Base EJA – '1ª D - Base estudantes de RAPP 2º Ciclo - EJA' (.xlsx)", type=["xlsx"],
+                                  key=f"up_ej_{st.session_state.get('ba_n', 0)}")
+        novo_ba = novo_ej = None
+        try:
+            if up_ba is not None:
+                novo_ba = ler_busca_ativa(lr._ler(up_ba))
+                novo_ba["Matrícula"] = casar_por_nome(novo_ba, df_comp)
+                novo_ba["Atualizado em"] = agora().strftime("%d/%m/%Y %H:%M")
+                sem_m = novo_ba[novo_ba["Matrícula"] == ""]
+                cb1.success(f"{len(novo_ba)} estudantes de {novo_ba['Escola'].nunique()} escolas · "
+                            + ", ".join(f"{k}: {v}" for k, v in novo_ba["Situação busca ativa"].value_counts().items()))
+                if len(sem_m):
+                    cb1.warning(f"{len(sem_m)} não encontrados no painel pelo nome (ficam marcados pelo nome + escola): "
+                                + "; ".join(sem_m["Nome"].head(10)))
+            if up_ej is not None:
+                novo_ej = ler_base_eja(up_ej)
+                novo_ej["Atualizado em"] = agora().strftime("%d/%m/%Y %H:%M")
+                cb2.success(f"{novo_ej['Matrícula'].nunique()} estudantes, {len(novo_ej)} componentes · "
+                            + ", ".join(f"{k}: {v}" for k, v in novo_ej["Classificação EJA"].value_counts().items()))
+        except Exception as ex:
+            st.error(f"Não foi possível ler a planilha: {ex}")
+        if (novo_ba is not None or novo_ej is not None) and st.button("💾 Salvar no painel", key="btn_salvar_ba"):
+            if novo_ba is not None:
+                salvar_tabela(WS_BUSCA, COLS_BUSCA, novo_ba)
+            if novo_ej is not None:
+                salvar_tabela(WS_EJA, COLS_EJA, novo_ej)
+            st.session_state["ba_n"] = st.session_state.get("ba_n", 0) + 1
+            st.session_state.pop("_lr_chave", None)
+            st.success("Salvo! A planilha completa e a aba 🏫 Dados de uma Escola já usam a versão nova.")
+            st.rerun()
+
     n_up = st.session_state.get("lr_n", 0)
     cu1, cu2 = st.columns(2)
     up_dia = cu1.file_uploader("1️⃣ Redash do dia (.xlsx) – Plurall", type=["xlsx", "csv"], key=f"up_dia_{n_up}")
@@ -2163,6 +2430,9 @@ elif aba == "🧹 Limpeza do Redash":
                     f"<span style='background:#{COR_NOVATO};padding:2px 8px;border-radius:4px'>Novato</span> "
                     f"<span style='background:#{COR_EJA};padding:2px 8px;border-radius:4px'>EJA</span>",
                     unsafe_allow_html=True)
+        st.caption(f"🩷 Busca ativa: {int((est_pc['Busca ativa'] != '').sum())} estudantes · "
+                   f"⬜ EJA com pendência só na modalidade EJA (não fazem RAPP): "
+                   f"{int(est_pc['Pendência EJA'].str.startswith('Não faz RAPP').sum())}")
         st.download_button("⬇️ Baixar planilha completa", xlsx_pc, type="primary",
                            file_name=f"RAPP_completa_{data_ref_lr:%d.%m}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -2237,23 +2507,31 @@ elif aba == ABA_ESCOLA:
         st.stop()
 
     vc_x = est_x["Situação do aluno"].value_counts()
-    m_ = st.columns(6)
+    m_ = st.columns(8)
     m_[0].metric("Estudantes", len(est_x))
     m_[1].metric("Aprovados", int(vc_x.get(AP, 0)))
     m_[2].metric("Não aprovados", int(vc_x.get(NAP, 0)))
     m_[3].metric("Não avaliados", int(vc_x.get(NAV, 0)))
     m_[4].metric("🟦 EJA", int((est_x["EJA"] != "").sum()))
     m_[5].metric("🟨 Novatos", int((est_x["Novato"] != "").sum()))
+    m_[6].metric("🩷 Busca ativa", int((est_x["Busca ativa"] != "").sum()))
+    m_[7].metric("⬜ Não fazem RAPP", int(est_x["Pendência EJA"].str.startswith("Não faz RAPP").sum()),
+                 help="EJA com pendência só na modalidade EJA (períodos)")
 
     f1, f2, f3 = st.columns([2, 2, 2])
     sits_x = f1.multiselect("Situação do estudante", ORDEM_SIT, default=ORDEM_SIT, key="x_sits")
-    marcas_x = f2.multiselect("Mostrar só", ["EJA", "Novatos"], key="x_marcas")
+    marcas_x = f2.multiselect("Mostrar só", ["EJA", "Novatos", "Busca ativa", "Não fazem RAPP (pendência EJA)"],
+                              key="x_marcas")
     busca_x = f3.text_input("Buscar estudante (nome ou matrícula)", key="x_busca")
     filt = est_x["Situação do aluno"].isin(sits_x)
     if "EJA" in marcas_x:
         filt &= est_x["EJA"] != ""
     if "Novatos" in marcas_x:
         filt &= est_x["Novato"] != ""
+    if "Busca ativa" in marcas_x:
+        filt &= est_x["Busca ativa"] != ""
+    if "Não fazem RAPP (pendência EJA)" in marcas_x:
+        filt &= est_x["Pendência EJA"].str.startswith("Não faz RAPP")
     if busca_x:
         b_ = norm_txt(busca_x)
         filt &= est_x["Nome"].map(norm_txt).str.contains(b_, na=False) | est_x["Matrícula"].str.contains(b_, na=False)
@@ -2262,10 +2540,11 @@ elif aba == ABA_ESCOLA:
 
     st.info(f"Exibindo {len(est_xf)} de {len(est_x)} estudantes.")
     ta, tb = st.tabs(["👤 Por estudante", "📚 Por componente (nota e situação)"])
-    ta.dataframe(estilo_linhas(est_xf[["Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Situação do aluno",
+    ta.dataframe(estilo_linhas(est_xf[["Matrícula", "Nome", "Série", "Turno", "EJA", "Novato", "Busca ativa",
+                                       "Pendência EJA", "Situação do aluno",
                                        "Situação Plurall", "Situação Avalia", "Notas por componente", "Pendências"]]),
                  hide_index=True, use_container_width=True)
-    tb.dataframe(estilo_linhas(comp_xf[["Matrícula", "Nome", "Série", "EJA", "Novato", "Plataforma", "Componente",
+    tb.dataframe(estilo_linhas(comp_xf[["Matrícula", "Nome", "Série", "EJA", "Novato", "Faz RAPP?", "Plataforma", "Componente",
                                         "Nota", "Situação", "Status plataforma", "Prova", "Atualizado em"]]),
                  hide_index=True, use_container_width=True)
 
