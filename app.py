@@ -954,8 +954,18 @@ def processar_importacao(arquivos_lidos, data_ref, comp_atual, cons_atual, mapa_
 # PLANILHA COMPLETA · EJA · NOVATOS · EXTRAÇÃO POR ESCOLA
 # ============================================================
 PASTA_REF = "referencias"
-REF_C1 = os.path.join(PASTA_REF, "Redash_1o_ciclo.xlsx")
-REF_MASTER = os.path.join(PASTA_REF, "Planilha_master_1o_ciclo.xlsx")
+
+
+def _achar_ref(nome):
+    """Procura a planilha de referência na pasta 'referencias' e, se não estiver lá, na raiz do repositório."""
+    for caminho in (os.path.join(PASTA_REF, nome), nome):
+        if os.path.exists(caminho):
+            return caminho
+    return os.path.join(PASTA_REF, nome)
+
+
+REF_C1 = _achar_ref("Redash_1o_ciclo.xlsx")
+REF_MASTER = _achar_ref("Planilha_master_1o_ciclo.xlsx")
 PADRAO_EJA = r"PER[IÍ]ODO|TURMA\s+II\b|SEMESTRE|M[OÓ]DULO|\bEJA\b"
 SEM_COMPONENTE = "(sem componente informado)"
 COR_EJA, COR_NOVATO, COR_NOVO_HOJE = "DBEAFE", "FEF3C7", "FED7AA"   # azul, amarelo, laranja
@@ -1097,6 +1107,10 @@ def ler_busca_ativa(df):
     cols = list(df.columns)
     c_data = next((c for c in cols if "CARIMBO" in norm_txt(c) or norm_txt(c).startswith("DATA")), None)
     c_esc = next((c for c in cols if "ESCOLA" in norm_txt(c)), None)
+    if "INDICADOR" in [norm_txt(c) for c in cols]:
+        raise ValueError("este arquivo é a planilha de análise (Busca_Ativa_RAPP_situacao.xlsx). Envie a planilha "
+                         "de RESPOSTAS baixada do Google Forms: 'Busca Ativa (estudantes do RAPP 2026 - 1ª DIREC) "
+                         "(respostas).xlsx' (no Forms: Respostas → Ver no Planilhas → Arquivo → Fazer download → .xlsx).")
     if c_esc is None or not any("[" in str(c) for c in cols):
         raise ValueError("não parece a planilha de respostas do formulário de busca ativa "
                          "(falta a coluna da escola ou as colunas '... [NOME DO ESTUDANTE]').")
@@ -1145,6 +1159,10 @@ def ler_base_eja(arquivo):
     abas = pd.read_excel(arquivo, sheet_name=None, dtype=str)
     alvo = next((d for d in abas.values() if any("SERIE DO COMPONENTE" in norm_txt(c) for c in d.columns)), None)
     if alvo is None:
+        if any("REALIZAM" in norm_txt(n_) for n_ in abas):
+            raise ValueError("este arquivo é a planilha de análise (EJA_quem_realiza_RAPP.xlsx). Envie a planilha "
+                             "original '1ª D - Base estudantes de RAPP 2º Ciclo - EJA.xlsx', a que tem a coluna "
+                             "'serie do componente em RAPP'.")
         raise ValueError("nenhuma aba tem a coluna 'serie do componente em RAPP'.")
     d = alvo
     col = lambda *a: _col(d, *a)
@@ -2499,7 +2517,7 @@ elif aba == ABA_ESCOLA:
     idx_x = escolas_x.index(filtro_escola) if filtro_escola in escolas_x else 0
     escola_x = st.selectbox("Escola", escolas_x, index=idx_x, key="sel_escola_extrair")
     if referencias_1o_ciclo()[0].empty:
-        st.warning("A planilha master não está no repositório (`referencias/Planilha_master_1o_ciclo.xlsx`): "
+        st.warning("A planilha master não foi encontrada no repositório (`Planilha_master_1o_ciclo.xlsx`): "
                    "turno e parte das séries ficam em branco. Suba a master no GitHub ou envie-a na aba 🧹 Limpeza do Redash.")
     est_x, comp_x = montar_tabelas(df_comp[df_comp["Escola"] == escola_x])
     if est_x.empty:
